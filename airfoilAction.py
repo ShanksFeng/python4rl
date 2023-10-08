@@ -7,7 +7,9 @@ def calculate_total_distance(data_points):
         total_distance += np.sqrt((data_points[i+1][0] - data_points[i][0])**2 + (data_points[i+1][1] - data_points[i][1])**2)
     return total_distance
 
-def smooth_adjustment(upper_half_points, lower_half_points, x_target, y_change_upper, y_change_lower, sigma=1.0, distance_threshold=0.1):
+def smooth_adjustment(upper_half_points, lower_half_points, x_target, y_change_upper, y_change_lower, sigma=2.0, distance_threshold=0.1):
+    #The larger the sigma, the larger the weight
+    #The larger the weight, the smoother the adjustment
     # Calculate distances from the target x-coordinate for each point in upper and lower curves
     distances_upper = [abs(p[0] - x_target) for p in upper_half_points]
     distances_lower = [abs(p[0] - x_target) for p in lower_half_points]
@@ -129,7 +131,7 @@ def closest_point(a, points):
 def perform_action(filepath, action, action_params):
     with open(filepath, 'r') as file:
         data = file.readlines()
-
+    warning_occurred = False
     upper_half_points = []
     lower_half_points = []
     current_section = 0  # 0 for header, 1 for upper half, 2 for lower half
@@ -202,7 +204,7 @@ def perform_action(filepath, action, action_params):
             file.write('\n')
             for point in lower_half_points:
                 file.write(' '.join(map(lambda x: '{:.16f}'.format(x), point)) + '\n')
-        return True, True
+        return True, True, warning_occurred
     else:
-        return False, True
+        return False, True, warning_occurred
 

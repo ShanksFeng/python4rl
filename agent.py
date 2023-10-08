@@ -14,13 +14,13 @@ from airfoilAction import perform_action
 from torch.nn.utils.rnn import pad_sequence
 import copy
 from config import device
-
-# 定义全局常量
-MINIMUM_REWARD_THRESHOLD = -5
+from torch.optim import lr_scheduler
 
 
+
+#test the github
 class OUNoise:
-    def __init__(self, action_dim, mu=0.0, theta=0.15, sigma=0.00002):
+    def __init__(self, action_dim, mu=0.0, theta=0.15, sigma=0.00005):
         self.action_dim = action_dim
         self.mu = mu
         self.theta = theta
@@ -94,10 +94,45 @@ def reset_to_best_reward_state(mesh_filepath, airfoil_data_filepath, agentIndex)
     # Paths to the best reward state files
     best_mesh_filepath = f"./agent{agentIndex}/bestReward.mesh"
     best_airfoil_data_filepath = f"../data/multipleAgent/agent{agentIndex}/Bestairfoil.dat"
-    # Copy the best reward state files to the current files
-    shutil.copy(best_mesh_filepath, mesh_filepath)
-    shutil.copy(best_airfoil_data_filepath, airfoil_data_filepath)
+    
+    print(f"Copying from {best_mesh_filepath} to {mesh_filepath}")
+    print(f"Copying from {best_airfoil_data_filepath} to {airfoil_data_filepath}")
+    
+    try:
+        # Copy the best reward state files to the current files
+        shutil.copy(best_mesh_filepath, mesh_filepath)
+        print(f"Successfully copied mesh file to {mesh_filepath}")
+        
+        shutil.copy(best_airfoil_data_filepath, airfoil_data_filepath)
+        print(f"Successfully copied airfoil data file to {airfoil_data_filepath}")
+        
+    except Exception as e:
+        print(f"Error occurred: {e}")
+def reset_to_origin_state(mesh_filepath, airfoil_data_filepath, agentIndex):
+    """
+    Reset the environment to the best reward state.
 
+    :param mesh_filepath: Path to the current mesh file.
+    :param airfoil_data_filepath: Path to the current airfoil data file.
+    """
+    print("The model crap!!! we recover to the Initial state")
+    # Paths to the best reward state files
+    best_mesh_filepath = f"./agent{agentIndex}/Origin.mesh"
+    best_airfoil_data_filepath = f"../data/airfoils/naca0012Revised.dat"
+    
+    print(f"Copying from {best_mesh_filepath} to {mesh_filepath}")
+    print(f"Copying from {best_airfoil_data_filepath} to {airfoil_data_filepath}")
+    
+    try:
+        # Copy the best reward state files to the current files
+        shutil.copy(best_mesh_filepath, mesh_filepath)
+        print(f"Successfully copied mesh file to {mesh_filepath}")
+        
+        shutil.copy(best_airfoil_data_filepath, airfoil_data_filepath)
+        print(f"Successfully copied airfoil data file to {airfoil_data_filepath}")
+        
+    except Exception as e:
+        print(f"Error occurred: {e}")
 
 
 def calculate_drag(agentIndex=None):
@@ -125,11 +160,11 @@ def calculate_drag(agentIndex=None):
     # Get the value from the last line, second column
     result = df.iloc[-1, 1]
     print(result)
-
+    #print(type(result))
     # Optionally, remove the done.txt file after reading the result
     os.remove(done_file_path)
 
-    return result
+    return float(result)
 
 
 def load_and_process_data(filepath):
@@ -237,24 +272,24 @@ class Actor(nn.Module):
         
         batch_size = state.size(0)
 
-        if batch_size > 1:
-            h_t = F.relu(self.bn1(self.layer1(h_t)))
-            h_t = F.relu(self.bn2(self.layer2(h_t)))
-            h_t = self.dropout(h_t)
-            h_t = F.relu(self.bn3(self.layer3(h_t)))
-            h_t = F.relu(self.bn4(self.layer4(h_t)))
-            h_t = self.dropout(h_t)
-            h_t = F.relu(self.bn5(self.layer5(h_t)))
-            h_t = F.relu(self.bn6(self.layer6(h_t)))
-        else:
-            h_t = F.relu(self.layer1(h_t))
-            h_t = F.relu(self.layer2(h_t))
-            h_t = self.dropout(h_t)
-            h_t = F.relu(self.layer3(h_t))
-            h_t = F.relu(self.layer4(h_t))
-            h_t = self.dropout(h_t)
-            h_t = F.relu(self.layer5(h_t))
-            h_t = F.relu(self.layer6(h_t))
+        #if batch_size > 1:
+         #   h_t = F.relu(self.bn1(self.layer1(h_t)))
+          #  h_t = F.relu(self.bn2(self.layer2(h_t)))
+           # h_t = self.dropout(h_t)
+            #h_t = F.relu(self.bn3(self.layer3(h_t)))
+            #h_t = F.relu(self.bn4(self.layer4(h_t)))
+            #h_t = self.dropout(h_t)
+            #h_t = F.relu(self.bn5(self.layer5(h_t)))
+            #h_t = F.relu(self.bn6(self.layer6(h_t)))
+        #else:
+        h_t = F.relu(self.layer1(h_t))
+        h_t = F.relu(self.layer2(h_t))
+        h_t = self.dropout(h_t)
+        h_t = F.relu(self.layer3(h_t))
+        h_t = F.relu(self.layer4(h_t))
+        h_t = self.dropout(h_t)
+        h_t = F.relu(self.layer5(h_t))
+        h_t = F.relu(self.layer6(h_t))
 
 
 
@@ -345,7 +380,7 @@ class Critic(nn.Module):
         self.q_value_fc = nn.Linear(256, 1)
 
         # Dropout layer
-        self.dropout = nn.Dropout(p=0.2)
+        self.dropout = nn.Dropout(p=0.1)
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -356,19 +391,19 @@ class Critic(nn.Module):
         state = F.elu(self.state_fc2(state))
         state = self.attention(state)   # Applying attention mechanism
         #state = F.elu(self.state_fc(state))
-        state = self.bn_state(state)
+        #state = self.bn_state(state)
         #print("critic_state shape: ", state.shape)
         
         # Process action through a fully connected layer
         action = action.float()
         action = F.elu(self.action_fc(action))
-        action = self.bn_action(action)
+        #action = self.bn_action(action)
         #print("critic_action shape: ", action.shape)
         
         # Process action parameters through a fully connected layer
         action_params = action_params.view(-1, action_params.size(-2) * action_params.size(-1))  # Reshape to 2D
         action_params = F.elu(self.action_param_fc1(action_params))
-        action_params = self.bn_action_param(action_params)
+        #action_params = self.bn_action_param(action_params)
         #print("critic_action_params shape: ", action_params.shape)
         
         # Create interaction terms through outer product operation
@@ -385,10 +420,10 @@ class Critic(nn.Module):
         concat_features = torch.cat([state, action, action_params, interaction_term1, interaction_term2, interaction_term3], dim=1)
         # Process the concatenated features through the fusion network
         fusion = F.elu(self.fusion_fc1(concat_features))
-        fusion = self.bn_fusion1(fusion)
+        #fusion = self.bn_fusion1(fusion)
         fusion = self.dropout(fusion)  # Apply dropout
         fusion = F.elu(self.fusion_fc2(fusion))
-        fusion = self.bn_fusion2(fusion)
+        #fusion = self.bn_fusion2(fusion)
         fusion = self.dropout(fusion)  # Apply dropout
         
         # Estimate the Q-value
@@ -436,9 +471,10 @@ class ReplayBuffer:
         return len(self.storage)
 
 class DDPGAgent:
-    def __init__(self, actor, critic, calculate_drag, max_action, replay_buffer):
+    def __init__(self, actor, critic, criticTwin , calculate_drag, max_action, replay_buffer):
         self.actor = actor.to(device) 
         self.critic = critic.to(device)
+        self.criticTwin =critic.to(device)
         self.calculate_drag = calculate_drag
         self.replay_buffer = replay_buffer
         self.filepaths = [
@@ -449,23 +485,28 @@ class DDPGAgent:
         ]
         self.max_action = max_action
         self.previous_drag = None
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-3)
-        #self.noise = OUNoise()
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-5)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-5)
+        #Here we use the Twin from the Twin delayed DDPG algorithm
+        self.criticTwin_optimizer = optim.Adam(self.criticTwin.parameters(), lr=1e-5)
+        self.noiseAction = OUNoise(action_dim=5, sigma= 0.01) # for action
         self.noise_0 = OUNoise(action_dim=3) # for param2_0, param3_0
         self.noise_3 = OUNoise(action_dim=1) # for param2_3
         self.noise_4 = OUNoise(action_dim=1) # for param2_4
 
         #self.noise_scale = 0.005
         #self.noise_reduction_factor = 0.85
-        self.actor_scheduler = StepLR(self.actor_optimizer, step_size=100, gamma=0.9)
-        self.critic_scheduler = StepLR(self.critic_optimizer, step_size=100, gamma=0.9)
-        self.update_frequency = 10
+        self.actor_scheduler = lr_scheduler.StepLR(self.actor_optimizer, step_size=10, gamma=0.95)
+        self.critic_scheduler = lr_scheduler.StepLR(self.critic_optimizer, step_size=10, gamma=0.95)
+        self.criticTwin_scheduler = lr_scheduler.StepLR(self.criticTwin_optimizer, step_size=10, gamma=0.95)
+        self.updateActor_frequency = 2
+        self.update_frequency = 5
         self.update_counter = 0
         self.best_reward_so_far = [-float('inf'), -float('inf'), -float('inf'), -float('inf')]
         # Create target networks
         self.actor_target = copy.deepcopy(actor).to(device)
         self.critic_target = copy.deepcopy(critic).to(device)
+        self.criticTwin_target = copy.deepcopy(critic).to(device)
         self.tauTrain = 0.005
         self.update_frequencyTrain = 2
         self.accumlateReward = [0, 0, 0, 0]
@@ -480,6 +521,8 @@ class DDPGAgent:
 
             #state = torch.FloatTensor(state)
             action_probs, action_params = self.actor(state)
+            action_noise = torch.tensor(self.noiseAction.sample()).to(device)
+            action_probs = action_probs + action_noise
         
             # 打印动作概率
             print("Action probabilities:", action_probs)
@@ -517,6 +560,23 @@ class DDPGAgent:
             print("Parameters after noise:", action_params4execute)
 
         #self.noise_scale *= self.noise_reduction_factor
+        
+            # Clip the parameters after noise
+            # Assume that parameter limits are stored in a dictionary like:
+            # param_limits = {0: [(-limit_1, limit_1), (-limit_2, limit_2), (-limit_3, limit_3)], 
+            #                 3: [(-limit_4, limit_4)], 
+            #                 4: [(-limit_5, limit_5)]}
+            param_limits = {
+                0: [(0.0, 1.0), (-0.005, 0.005), (-0.005, 0.005)],
+                3: [(-0.002, 0.002)],
+                4: [(-0.002, 0.002)]
+            }
+            
+            if action4execute in param_limits:
+                for i, (min_val, max_val) in enumerate(param_limits[action4execute]):
+                    action_params4execute[i] = np.clip(action_params4execute[i], min_val, max_val)
+            
+            print("Parameters after noise and clipping:", action_params4execute)
 
         return action4execute, action_params4execute ,action_probs, action_params
 
@@ -541,10 +601,11 @@ class DDPGAgent:
         
         return reward
 
-        # Function to pad action parameters to a consistent length
+        
+        #This is the function to pad the action parameters to a consistent length
     def pad_action_params(self, action_params_batch, max_length=3):
-        print("action_params_batch type: ", type(action_params_batch))
-        print("action_params_batch: ", action_params_batch)
+        #print("action_params_batch type: ", type(action_params_batch))
+        #print("action_params_batch: ", action_params_batch)
         padded_batch = []
         for action_params in action_params_batch:
             padded_action_params = []
@@ -581,32 +642,28 @@ class DDPGAgent:
         return batch_action_params_padded
 
 
-    def train(self, iterations, agentIndex, batch_size=64, action_param_dim=3,discount=0.99, tau=0.005):
+    def train(self, iterations, agentIndex, batch_size, action_param_dim=3,discount=0.99, tau=0.005):
         print("Entered the train method.")
         
         for it in range(iterations):
-            
-            # Check if this is the best reward so far and save the state if it is
-            if self.accumlateReward[agentIndex] > self.best_reward_so_far[agentIndex]:
-                self.best_reward_so_far[agentIndex] = self.accumlateReward[agentIndex]
-                save_best_reward_state(mesh_filepath=f"./agent{agentIndex}/body.mesh", airfoil_data_filepath=f"../data/multipleAgent/agent{agentIndex}/naca0012Revised.dat", dx_filepath = f"./agent{agentIndex}/CurveCapture.dx", agentIndex=agentIndex)
-            # Check if the reward is below the minimum threshold and reset to the best state if it is
-            if self.accumlateReward[agentIndex] < MINIMUM_REWARD_THRESHOLD:
-                reset_to_best_reward_state(mesh_filepath=f"./agent{agentIndex}/body.mesh", airfoil_data_filepath=f"../data/multipleAgent/agent{agentIndex}/naca0012Revised.dat", agentIndex=agentIndex)
-                # Reload the state to start training from the best state
-                state = load_and_process_data(self.filepaths[agentIndex]).to(device)
-            
             
             # Sample action from actor
             state = load_and_process_data(self.filepaths[agentIndex]).to(device)
             action4execute, action_params4execute, action, action_params = self.select_action(state)
 
             # Apply the action and get the new state
-            perform_action(self.filepaths[agentIndex], action4execute, action_params4execute)
+            success, _, warning_occurred = perform_action(self.filepaths[agentIndex], action4execute, action_params4execute)
             next_state = load_and_process_data(self.filepaths[agentIndex]).to(device)
 
             # Get the reward
+            
             reward = self.get_reward(agentIndex)
+            
+            
+            if warning_occurred:
+                reward -= 10
+            elif reward > 0:
+                reward *= 1.3 
             self.accumlateReward[agentIndex] += reward
             print(f"Iteration {it}: Reward = {reward}")
             print(f"Iteration {it}: AccumlateReward = {self.accumlateReward[agentIndex]}") 
@@ -642,7 +699,9 @@ class DDPGAgent:
                 print("current_Q shape : ", current_Q.shape)
                 print("current_Q content : ", current_Q)
                 # Compute the target Q value
-                next_actions, next_action_params = self.actor(batch_next_states)  # Use batch_next_states here
+                next_actions, next_action_params = self.actor_target(batch_next_states) 
+                
+                
                 #print("next_actions shape: ", next_actions.shape)
                 #print("next_actions content: ", next_actions)
                 #next_actions = torch.argmax(next_actions, dim=1)  # Find the most probable action for each sample
@@ -657,38 +716,50 @@ class DDPGAgent:
                 #print("next_action_params_padded shape: ", next_action_params_padded.shape)
                 #print("next_action_params_padded content: ", next_action_params_padded)
                 # Handle action parameters for next_action_params
-                target_Q = self.critic(batch_next_states, next_actions, next_action_params_padded)
+                target_Q1 = self.critic_target(batch_next_states, next_actions, next_action_params_padded)
+                target_Q2 = self.criticTwin_target(batch_next_states, next_actions, next_action_params_padded)
+                target_Q = torch.min(target_Q1, target_Q2)
                 batch_rewards = batch_rewards.unsqueeze(1).to(device)
                 target_Q = batch_rewards + (discount * target_Q).detach()
                 #print("target_Q shape : ", target_Q.shape)
-                #print("target_Q content : ", target_Q)
+                print("target_Q1 content : ", target_Q1)
+                print("target_Q2 content : ", target_Q2)
+                print("target_Q content : ", target_Q)
                 # Compute critic loss
                 critic_loss = F.mse_loss(current_Q, target_Q)
 
                 # Optimize the critic
                 self.critic_optimizer.zero_grad()
+                self.criticTwin_optimizer.zero_grad()
                 critic_loss.backward()
                 self.critic_optimizer.step()
-
-                new_actions, new_action_params = self.actor(batch_states)
-                new_action_params_padded = self.pad_actor_action_params(batch_size4actor, new_action_params)
-                actor_loss = -self.critic(batch_states, new_actions, new_action_params_padded).mean()
-                
-                # Optimize the actor
-                self.actor_optimizer.zero_grad()
-                actor_loss.backward()
-                self.actor_optimizer.step()
-
-                # Step the learning rate scheduler
-                self.actor_scheduler.step()
+                self.criticTwin_optimizer.step()
                 self.critic_scheduler.step()
+                self.criticTwin_scheduler.step()
+
+                if it % self.updateActor_frequency == 0:
+                    new_actions, new_action_params = self.actor(batch_states)
+                    new_action_params_padded = self.pad_actor_action_params(batch_size4actor, new_action_params)
+                    actor_loss = -self.critic(batch_states, new_actions, new_action_params_padded).mean()
+                    
+                    # Optimize the actor
+                    self.actor_optimizer.zero_grad()
+                    actor_loss.backward()
+                    self.actor_optimizer.step()
+                    self.actor_scheduler.step()
+                
+
+               
 
                 # Update the target networks
+                # The target networks update with formular tau * theta + (1 - tau) * theta_target
                 if it % self.update_frequencyTrain == 0:
                     for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
                         target_param.data.copy_(self.tauTrain * param.data + (1 - self.tauTrain) * target_param.data)
 
                     for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+                        target_param.data.copy_(self.tauTrain * param.data + (1 - self.tauTrain) * target_param.data)
+                    for param, target_param in zip(self.criticTwin.parameters(), self.criticTwin_target.parameters()):
                         target_param.data.copy_(self.tauTrain * param.data + (1 - self.tauTrain) * target_param.data)
                 self.noise_0.reset()
                 self.noise_3.reset()
