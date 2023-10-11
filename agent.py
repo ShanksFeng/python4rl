@@ -17,10 +17,15 @@ from config import device
 from torch.optim import lr_scheduler
 
 
+def calculate_entropy(probabilities):
+    epsilon = 1.0e-8  # 小的正值，用来防止 log(0)
+    clipped_probs = torch.clamp(probabilities, min=epsilon, max=1-epsilon)  # 裁剪概率值
+    log_probabilities = torch.log(clipped_probs)  # 计算对数概率
+    entropy = - torch.sum(probabilities * log_probabilities, dim=-1)  # 计算熵
+    return entropy
 
-#test the github
 class OUNoise:
-    def __init__(self, action_dim, mu=0.0, theta=0.15, sigma=0.00005):
+    def __init__(self, action_dim, mu=0.0, theta=0.15, sigma=0.0005):
         self.action_dim = action_dim
         self.mu = mu
         self.theta = theta
@@ -59,6 +64,63 @@ def print_structure_and_type(obj, indent=0):
     else:
         print(f"{spacing}Type: {type(obj)}")
         print(f"{spacing}Value: {obj}")
+        
+def save_opposite_state(mesh_filepath, airfoil_data_filepath, mapping_filepath, agentIndex):
+    """
+    Save the current state files, prepare for the oppsite action.
+
+    :param mesh_filepath: Path to the current mesh file.
+    :param airfoil_data_filepath: Path to the current airfoil data file.
+    """
+     # Paths to the best reward state files
+    print("Save current and step to opposite State")
+    opposite_mesh_filepath = f"./agent{agentIndex}/opposite.mesh"
+    opposite_airfoil_data_filepath = f"../data/multipleAgent/agent{agentIndex}/OppositeAirfoil.dat"
+    opposite_mapping_filepath = f"./agent{agentIndex}/mappingOppositePoint.dat"
+    
+
+    # Ensure the directories exist before copying files
+    os.makedirs(os.path.dirname(opposite_mesh_filepath), exist_ok=True)
+    os.makedirs(os.path.dirname(opposite_airfoil_data_filepath), exist_ok=True)
+    os.makedirs(os.path.dirname(opposite_mapping_filepath), exist_ok=True)
+
+    # Copy the current files to the opposite state files
+    shutil.copy(mesh_filepath, opposite_mesh_filepath)
+    shutil.copy(airfoil_data_filepath, opposite_airfoil_data_filepath)  
+    shutil.copy(mapping_filepath, opposite_mapping_filepath)
+    
+def reload_opposite_state(mesh_filepath, airfoil_data_filepath, mapping_filepath, agentIndex):
+    """
+    Reset the environment to the opposite state.
+
+    :param mesh_filepath: Path to the current mesh file.
+    :param airfoil_data_filepath: Path to the current airfoil data file.
+    """
+    print(" we recover to the opposite state")
+    # Paths to the best reward state files
+    opposite_mesh_filepath = f"./agent{agentIndex}/opposite.mesh"
+    opposite_airfoil_data_filepath = f"../data/multipleAgent/agent{agentIndex}/OppositeAirfoil.dat"
+    opposite_mapping_filepath = f"./agent{agentIndex}/mappingOppositePoint.dat"
+    
+    print(f"Copying from {opposite_mesh_filepath} to {mesh_filepath}")
+    print(f"Copying from {opposite_airfoil_data_filepath} to {airfoil_data_filepath}")
+    print(f"Copying from {opposite_mapping_filepath} to {mapping_filepath}")
+
+    
+    try:
+        # Copy the best reward state files to the current files
+        shutil.copy(opposite_mesh_filepath, mesh_filepath)
+        print(f"Successfully copied mesh file to {mesh_filepath}")
+        
+        shutil.copy(opposite_airfoil_data_filepath, airfoil_data_filepath)
+        print(f"Successfully copied airfoil data file to {airfoil_data_filepath}")
+        
+        shutil.copy(opposite_mapping_filepath, mapping_filepath)
+        print(f"Successfully copied mapping file to {mapping_filepath}")
+        
+    except Exception as e:
+        print(f"Error occurred: {e}")   
+        
 
 def save_best_reward_state(mesh_filepath, airfoil_data_filepath, dx_filepath, agentIndex):
     """
@@ -210,7 +272,9 @@ class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
         super(Actor, self).__init__()
 
-        self.lstm = nn.LSTM(state_dim, 256, 1, batch_first=True)
+        self.fc = nn.Linear( 66 * 2 * 2, 256) 
+        #66 for the upper, 2 for the both side, upper and lower, 2 for the x and y
+        #self.lstm = nn.LSTM(state_dim, 256, 1, batch_first=True)
         self.attention = actorAttention(256)
         self.feature_extractor = nn.Sequential(
             nn.Linear(256, 512),
@@ -251,12 +315,12 @@ class Actor(nn.Module):
         self.layer_param2_2 = nn.Linear(128, 1)
 
         # For action 3
-        self.layer_param1_3 = nn.Linear(256, 128)
-        self.layer_param2_3 = nn.Linear(128, 1)
+        #self.layer_param1_3 = nn.Linear(256, 128)
+        #self.layer_param2_3 = nn.Linear(128, 1)
 
         # For action 4
-        self.layer_param1_4 = nn.Linear(256, 128)
-        self.layer_param2_4 = nn.Linear(128, 1)
+        #self.layer_param1_4 = nn.Linear(256, 128)
+        #self.layer_param2_4 = nn.Linear(128, 1)
 
         self.max_action = max_action
 
@@ -264,8 +328,10 @@ class Actor(nn.Module):
         self._initialize_weights()
 
     def forward(self, state):
-        h_t, _ = self.lstm(state)
-        h_t = h_t[:, -1]  # 使用 LSTM 的最后一个输出
+        batch_size = state.size(0)
+        h_t = self.fc(state.reshape(batch_size, -1))
+        #h_t, _ = self.lstm(state)
+        #h_t = h_t[:, -1]  # 使用 LSTM 的最后一个输出
         h_t = self.attention(h_t)
         h_t = self.feature_extractor(h_t)
         
@@ -295,8 +361,8 @@ class Actor(nn.Module):
 
         action_logits = self.layer_action(h_t)
         #action_logits[:, 0] += 1.0
-        action_logits[:, 1] -= 2000.0  # Add negative bias to action 1
-        action_logits[:, 2] -= 2000.0
+        #action_logits[:, 1] -= 2000.0  # Add negative bias to action 1
+        #action_logits[:, 2] -= 2000.0
         action = F.softmax(action_logits, dim=-1)
 
 
@@ -310,23 +376,23 @@ class Actor(nn.Module):
         param3_0 = Constriant *torch.tanh(self.layer_param2_0(param1_0))
         param4_0 = Constriant *torch.tanh(self.layer_param3_0(param1_0))
 
-        param1_1 = Lbound + torch.sigmoid(F.relu(self.layer_param1_1(h_t))) * (Rbound - Lbound)
-        param2_1 = Lbound + torch.sigmoid(self.layer_param2_1(param1_1)) * (Rbound -Lbound)
+        #param1_1 = Lbound + torch.sigmoid(F.relu(self.layer_param1_1(h_t))) * (Rbound - Lbound)
+        #param2_1 = Lbound + torch.sigmoid(self.layer_param2_1(param1_1)) * (Rbound -Lbound)
 
-        param1_2 = Lbound + torch.sigmoid(F.relu(self.layer_param1_2(h_t))) * (Rbound -Lbound)
-        param2_2 = Lbound + torch.sigmoid(self.layer_param2_2(param1_2)) * (Rbound -Lbound)
+        #param1_2 = Lbound + torch.sigmoid(F.relu(self.layer_param1_2(h_t))) * (Rbound -Lbound)
+        #param2_2 = Lbound + torch.sigmoid(self.layer_param2_2(param1_2)) * (Rbound -Lbound)
 
-        param1_3 = F.relu(self.layer_param1_3(h_t))
-        param2_3 = Constriant *torch.tanh(self.layer_param2_3(param1_3))
+        param1_1 = F.relu(self.layer_param1_1(h_t))
+        param2_1 = Constriant *torch.tanh(self.layer_param2_1(param1_1))
 
-        param1_4 = F.relu(self.layer_param1_4(h_t))
-        param2_4 = Constriant *torch.tanh(self.layer_param2_4(param1_4))
+        param1_2 = F.relu(self.layer_param1_2(h_t))
+        param2_2 = Constriant *torch.tanh(self.layer_param2_2(param1_2))
 
         action_params = [[param2_0, param3_0, param4_0], 
                          [param2_1], 
-                         [param2_2], 
-                         [param2_3], 
-                         [param2_4]]
+                         [param2_2]] 
+                         #[param2_3], 
+                         #[param2_4]]
 
         return action, action_params
 
@@ -350,7 +416,7 @@ class Attention(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim = 5, action_param_dim = 3):
+    def __init__(self, state_dim, action_dim = 3, action_param_dim = 3):
         super(Critic, self).__init__()
 
         # State processing
@@ -438,8 +504,6 @@ class Critic(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
-
-
 class ReplayBuffer:
     def __init__(self, max_size):
         self.storage = []
@@ -486,13 +550,17 @@ class DDPGAgent:
         self.max_action = max_action
         self.previous_drag = None
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-5)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-5)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=8e-3)
         #Here we use the Twin from the Twin delayed DDPG algorithm
-        self.criticTwin_optimizer = optim.Adam(self.criticTwin.parameters(), lr=1e-5)
-        self.noiseAction = OUNoise(action_dim=5, sigma= 0.01) # for action
+        self.criticTwin_optimizer = optim.Adam(self.criticTwin.parameters(), lr=4e-3)
+        self.noiseAction = OUNoise(action_dim=3, sigma= 0.001) # for action
         self.noise_0 = OUNoise(action_dim=3) # for param2_0, param3_0
         self.noise_3 = OUNoise(action_dim=1) # for param2_3
         self.noise_4 = OUNoise(action_dim=1) # for param2_4
+        self.epsilon = 1.0  # initial exploration rate
+        self.epsilon_min = 0.01  # minimum exploration rate
+        self.epsilon_decay = 0.99
+        self.bias_for_action_0 = 0.8 #give a bias(more) for action 0
 
         #self.noise_scale = 0.005
         #self.noise_reduction_factor = 0.85
@@ -502,7 +570,7 @@ class DDPGAgent:
         self.updateActor_frequency = 2
         self.update_frequency = 5
         self.update_counter = 0
-        self.best_reward_so_far = [-float('inf'), -float('inf'), -float('inf'), -float('inf')]
+        self.best_reward_so_far = [0.1, 0.1, 0.1, 0.1]
         # Create target networks
         self.actor_target = copy.deepcopy(actor).to(device)
         self.critic_target = copy.deepcopy(critic).to(device)
@@ -510,9 +578,18 @@ class DDPGAgent:
         self.tauTrain = 0.005
         self.update_frequencyTrain = 2
         self.accumlateReward = [0, 0, 0, 0]
+        
+    def update_epsilon(self):
+        self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
+        self.bias_for_action_0 = max(self.bias_for_action_0 * self.epsilon_decay, 0.05)
 
     def select_action(self, state):
         state = state.to(device)
+        
+        # Decide whether to explore or exploit
+        explore = np.random.rand() < self.epsilon
+        guide = np.random.rand() < self.epsilon * 0.5
+        
         with torch.no_grad():
             # 如果state不是批次输入（即它只有两个维度），我们添加一个批次维度
             is_single_input = len(state.shape) == 2
@@ -522,10 +599,22 @@ class DDPGAgent:
             #state = torch.FloatTensor(state)
             action_probs, action_params = self.actor(state)
             action_noise = torch.tensor(self.noiseAction.sample()).to(device)
-            action_probs = action_probs + action_noise
+            print("Action probabilities before noise:", action_probs)
+            if explore:
+                action_probs = action_probs + action_noise * 10
+                print("noise :", action_noise)  
+                 # 给动作0增加一个偏置
+                action_probs[0][0] += self.bias_for_action_0
+                print("Action probabilities after bias:", action_probs)
+        
+                # 确保概率和为1
+                action_probs = action_probs / action_probs.sum()
+            else:
+                action_probs = action_probs + action_noise * 1
+                action_probs = action_probs / action_probs.sum()               
         
             # 打印动作概率
-            print("Action probabilities:", action_probs)
+            print("Action probabilities after noise:", action_probs)
         
        
             action4execute = torch.argmax(action_probs).item()
@@ -540,21 +629,49 @@ class DDPGAgent:
             # Add Gaussian noise to the specific action parameters
             noise_indices = {
                 0: [0, 1, 2],  # indices for param2_0, param3_0
-                3: [0],    # index for param2_3
-                4: [0]     # index for param2_4
+                1: [0],    # index for param2_3
+                2: [0]     # index for param2_4
             }
             if action4execute in noise_indices:
                 for idx in noise_indices[action4execute]:
                     if action4execute == 0:
                         noise = self.noise_0.sample()
                         for i, param_idx in enumerate(noise_indices[action4execute]):
-                            action_params4execute[param_idx] += noise[i]
-                    elif action4execute == 3:
+                            if explore:
+                                if i == 0:
+                                    action_params4execute[i] += noise[i] * 100
+                                    action_params[0][0] += noise[i] * 100
+                                else:
+                                    action_params4execute[i] += noise[i] * 2
+                                    action_params[0][i] += noise[i] * 2
+                                    if guide:
+                                        action_params4execute[1] = -abs(action_params4execute[1])
+                                        action_params4execute[2] = abs(action_params4execute[2])
+                                        action_params[0][1] = action_params4execute[1]
+                                        action_params[0][2] = action_params4execute[2]
+                            else:
+                                action_params4execute[param_idx] += noise[i]
+                                action_params[0][param_idx] += noise[i]
+                    elif action4execute == 1:
                         noise = self.noise_3.sample()
-                        action_params4execute[0] += noise[0]
-                    elif action4execute == 4:
+                        if explore:
+                            action_params4execute[0] += noise[0] * 2
+                            action_params[1][0] += noise[0] * 2
+                        else:
+                            action_params4execute[0] += noise[0]
+                            action_params[1][0] += noise[0]
+                    elif action4execute == 2:
                         noise = self.noise_4.sample()
-                        action_params4execute[0] += noise[0]
+                        if explore:
+                            action_params4execute[0] += noise[0] * 2
+                            action_params[2][0] += noise[0] * 2
+                            if guide:
+                                action_params4execute[0] = abs(action_params4execute[0])
+                                action_params[2][0] = action_params4execute[0]
+                                
+                        else:
+                            action_params4execute[0] += noise[0]
+                            action_params[2][0] += noise[0]
 
             # 打印添加噪声后的参数
             print("Parameters after noise:", action_params4execute)
@@ -568,15 +685,20 @@ class DDPGAgent:
             #                 4: [(-limit_5, limit_5)]}
             param_limits = {
                 0: [(0.0, 1.0), (-0.005, 0.005), (-0.005, 0.005)],
-                3: [(-0.002, 0.002)],
-                4: [(-0.002, 0.002)]
+                1: [(-0.002, 0.002)],
+                2: [(-0.002, 0.002)]
             }
-            
+            threshold = 0.05
             if action4execute in param_limits:
                 for i, (min_val, max_val) in enumerate(param_limits[action4execute]):
+                    if action4execute == 0 and (action_params4execute[0] >= 1 - threshold or action_params4execute[0] <= threshold  ) and i != 0:
+                        action_params4execute[i] = np.clip(action_params4execute[i], min_val  * abs(1 - action_params4execute[0]) * abs(action_params4execute[0]), max_val  * abs(1 - action_params4execute[0]) * abs(action_params4execute[0]))
+                        action_params[action4execute][i] = action_params4execute[i]
                     action_params4execute[i] = np.clip(action_params4execute[i], min_val, max_val)
+                    action_params[action4execute][i] = action_params4execute[i]
             
             print("Parameters after noise and clipping:", action_params4execute)
+            action_params[action4execute]
 
         return action4execute, action_params4execute ,action_probs, action_params
 
@@ -590,7 +712,7 @@ class DDPGAgent:
         # 如果 total_distance 超出范围，返回一个惩罚值
         if not (2.0 <= total_distance <= 3.6):
             print(f"total_distance = {total_distance}")
-            return -60
+            return -10
 
         # 否则，根据您的原始计算返回奖励
         if self.previous_drag is None:
@@ -622,7 +744,7 @@ class DDPGAgent:
     
     def pad_actor_action_params(self, batch_size4actor, next_action_params):
     # The number of action dimensions
-        action_dim = 5
+        action_dim = 3
     
     # The number of action parameter dimensions
         action_param_dim = 3
@@ -646,24 +768,57 @@ class DDPGAgent:
         print("Entered the train method.")
         
         for it in range(iterations):
-            
+            print(" For the Iteration: ", it)
             # Sample action from actor
             state = load_and_process_data(self.filepaths[agentIndex]).to(device)
+            
+            
             action4execute, action_params4execute, action, action_params = self.select_action(state)
-
+            entropy = calculate_entropy(action)
+            
             # Apply the action and get the new state
             success, _, warning_occurred = perform_action(self.filepaths[agentIndex], action4execute, action_params4execute)
             next_state = load_and_process_data(self.filepaths[agentIndex]).to(device)
 
-            # Get the reward
-            
+            # Get the reward     
             reward = self.get_reward(agentIndex)
+            print("During the training iteration {}, the reward is {}".format(it, reward))
             
             
             if warning_occurred:
-                reward -= 10
+                reward -= 2
             elif reward > 0:
-                reward *= 1.3 
+                if action4execute == 0:
+                    reward *= 1.3
+                else: 
+                    reward *= 1.0
+                    
+            if action4execute == 0 and reward < 0:
+                print(f"[OPPSITE] Now we try the opposite direction")
+                save_opposite_state(mesh_filepath=f"./agent{agentIndex}/body.mesh", airfoil_data_filepath=f"../data/multipleAgent/agent{agentIndex}/naca0012Revised.dat",  mapping_filepath=f"./agent{agentIndex}/CurrentPoint.dat", agentIndex=agentIndex,)
+                
+                action_params4execute[1] = - 2 * action_params4execute[1]
+                action_params4execute[2] = - 2 * action_params4execute[2]
+                action_params[0][1] = action_params4execute[1]
+                action_params[0][2] = action_params4execute[2]     
+                success, _, warning_occurred = perform_action(self.filepaths[agentIndex], action4execute, action_params4execute)  
+                opposite_state = load_and_process_data(self.filepaths[agentIndex])
+                opposite_reward = self.get_reward(agentIndex) + reward
+                print("[OPPOSITE] Parameters in the opposite:", action_params4execute)
+                if opposite_reward > reward:
+                    next_state = opposite_state
+                    reward = opposite_reward
+                    if reward > 0:
+                        reward *= 1.3
+                    print(f"[OPPOSITE] Oppsite direction is better, reward = {reward}")
+                else:
+                    action_params4execute[1] = - 0.5 * action_params4execute[1]
+                    action_params4execute[2] = - 0.5 * action_params4execute[2]
+                    action_params[0][1] = action_params4execute[1]
+                    action_params[0][2] = action_params4execute[2] 
+                    reload_opposite_state(mesh_filepath=f"./agent{agentIndex}/body.mesh", airfoil_data_filepath=f"../data/multipleAgent/agent{agentIndex}/naca0012Revised.dat",  mapping_filepath=f"./agent{agentIndex}/CurrentPoint.dat", agentIndex=agentIndex,)
+                    print(f"[OPPOSITE] Opposite direction is worse, reward = {reward}")  
+                    
             self.accumlateReward[agentIndex] += reward
             print(f"Iteration {it}: Reward = {reward}")
             print(f"Iteration {it}: AccumlateReward = {self.accumlateReward[agentIndex]}") 
@@ -679,7 +834,7 @@ class DDPGAgent:
                 # Stack states and next states into tensors
                 batch_states = torch.cat(batch_states, dim=0).to(device)
                 batch_next_states = torch.cat(batch_next_states, dim=0).to(device)
-                #print("batch_states shape: ", batch_states.shape)
+                print("batch_states shape: ", batch_states.shape)
                 #print("batch_next_states shape: ", batch_next_states.shape)
                 # Convert actions and rewards lists to tensors
                 # print("batch_actions shape before reshaping: ", batch_actions.shape)
@@ -740,7 +895,7 @@ class DDPGAgent:
                 if it % self.updateActor_frequency == 0:
                     new_actions, new_action_params = self.actor(batch_states)
                     new_action_params_padded = self.pad_actor_action_params(batch_size4actor, new_action_params)
-                    actor_loss = -self.critic(batch_states, new_actions, new_action_params_padded).mean()
+                    actor_loss = -self.critic(batch_states, new_actions, new_action_params_padded).mean() - 10.0 * entropy 
                     
                     # Optimize the actor
                     self.actor_optimizer.zero_grad()
@@ -748,9 +903,6 @@ class DDPGAgent:
                     self.actor_optimizer.step()
                     self.actor_scheduler.step()
                 
-
-               
-
                 # Update the target networks
                 # The target networks update with formular tau * theta + (1 - tau) * theta_target
                 if it % self.update_frequencyTrain == 0:

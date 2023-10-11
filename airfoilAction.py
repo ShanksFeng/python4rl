@@ -171,23 +171,23 @@ def perform_action(filepath, action, action_params):
         upper_half_points, lower_half_points, warning_occurred = adjust_point(upper_half_points, lower_half_points, x_target, y_change_upper, y_change_lower)
         upper_half_points, lower_half_points = smooth_adjustment(upper_half_points, lower_half_points, x_target, y_change_upper, y_change_lower)
 
-    elif action == 1:  # 插入点
-        x_new = action_params[0]
-        upper_half_points = add_point(upper_half_points, x_new)
-        lower_half_points = add_point(lower_half_points, x_new)
+    #elif action == 1:  # 插入点
+     #   x_new = action_params[0]
+      #  upper_half_points = add_point(upper_half_points, x_new)
+       # lower_half_points = add_point(lower_half_points, x_new)
 
-    elif action == 2:  # 删除点
-        a = action_params[0]
-        x_target = closest_point(a, upper_half_points[1:-1])  # 忽略初端和末端
-        upper_half_points, lower_half_points = remove_point(upper_half_points, lower_half_points, x_target)
+   # elif action == 2:  # 删除点
+    #    a = action_params[0]
+     #   x_target = closest_point(a, upper_half_points[1:-1])  # 忽略初端和末端
+      #  upper_half_points, lower_half_points = remove_point(upper_half_points, lower_half_points, x_target)
 
-    elif action == 3:  # 改变初端点
+    elif action == 1:  # 改变初端点
         y_change = action_params[0]
         x_target = upper_half_points[0][0]
         upper_half_points, lower_half_points = adjust_pointIE(upper_half_points, lower_half_points, x_target, y_change)
         upper_half_points, lower_half_points = smooth_adjustment(upper_half_points, lower_half_points, x_target, y_change, y_change)
 
-    elif action == 4:  # 改变末端点
+    elif action == 2:  # 改变末端点
         y_change = action_params[0]
         x_target = upper_half_points[-1][0]
         upper_half_points, lower_half_points = adjust_pointIE(upper_half_points, lower_half_points, x_target, y_change)
