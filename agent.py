@@ -156,9 +156,11 @@ def reset_to_best_reward_state(mesh_filepath, airfoil_data_filepath, agentIndex)
     # Paths to the best reward state files
     best_mesh_filepath = f"./agent{agentIndex}/bestReward.mesh"
     best_airfoil_data_filepath = f"../data/multipleAgent/agent{agentIndex}/Bestairfoil.dat"
+    #best_mapping_filepath = f"./agent{agentIndex}/OriginMap.dat"
     
     print(f"Copying from {best_mesh_filepath} to {mesh_filepath}")
     print(f"Copying from {best_airfoil_data_filepath} to {airfoil_data_filepath}")
+    #print(f"Copying from {current_mapping_filepath} to {best_mapping_filepath}")
     
     try:
         # Copy the best reward state files to the current files
@@ -168,9 +170,12 @@ def reset_to_best_reward_state(mesh_filepath, airfoil_data_filepath, agentIndex)
         shutil.copy(best_airfoil_data_filepath, airfoil_data_filepath)
         print(f"Successfully copied airfoil data file to {airfoil_data_filepath}")
         
+        #shutil.copy(best_mapping_filepath, current_mapping_filepath)
+        #print(f"Successfully copied mapping file to {best_mapping_filepath}")
+        
     except Exception as e:
         print(f"Error occurred: {e}")
-def reset_to_origin_state(mesh_filepath, airfoil_data_filepath, agentIndex):
+def reset_to_origin_state(mesh_filepath, airfoil_data_filepath, current_mapping_filepath, agentIndex):
     """
     Reset the environment to the best reward state.
 
@@ -181,9 +186,11 @@ def reset_to_origin_state(mesh_filepath, airfoil_data_filepath, agentIndex):
     # Paths to the best reward state files
     best_mesh_filepath = f"./agent{agentIndex}/Origin.mesh"
     best_airfoil_data_filepath = f"../data/airfoils/naca0012Revised.dat"
+    best_mapping_filepath = f"./agent{agentIndex}/OriginMap.dat"
     
     print(f"Copying from {best_mesh_filepath} to {mesh_filepath}")
     print(f"Copying from {best_airfoil_data_filepath} to {airfoil_data_filepath}")
+    print(f"Copying from {best_mapping_filepath} to {current_mapping_filepath}")
     
     try:
         # Copy the best reward state files to the current files
@@ -192,6 +199,9 @@ def reset_to_origin_state(mesh_filepath, airfoil_data_filepath, agentIndex):
         
         shutil.copy(best_airfoil_data_filepath, airfoil_data_filepath)
         print(f"Successfully copied airfoil data file to {airfoil_data_filepath}")
+        
+        shutil.copy(best_mapping_filepath, current_mapping_filepath)
+        print(f"Successfully copied mapping file to {current_mapping_filepath}")
         
     except Exception as e:
         print(f"Error occurred: {e}")
@@ -255,18 +265,80 @@ def load_and_process_data(filepath):
     coordinates = coordinates.unsqueeze(0).to(device)
 
     return coordinates
-class actorAttention(nn.Module):
+
+class ScaledDotProductAttention(nn.Module):
     def __init__(self, feature_dim):
-        super(actorAttention, self).__init__()
-        self.attention_fc = nn.Linear(feature_dim, 1)
+        super(ScaledDotProductAttention, self).__init__()
+        self.query = nn.Linear(feature_dim, feature_dim)
+        self.key = nn.Linear(feature_dim, feature_dim)
+        self.value = nn.Linear(feature_dim, feature_dim)
+        self.scale = torch.sqrt(torch.FloatTensor([feature_dim])).to(device)
 
     def forward(self, x):
-        # Compute attention weights
-        weights = F.softmax(self.attention_fc(x), dim=1)
-        # Compute weighted representation
-        weighted_x = x * weights
-        #summed_x = torch.sum(weighted_x, dim=1)
-        return weighted_x
+        Q = self.query(x)
+        K = self.key(x)
+        V = self.value(x)
+        
+        attention_weights = F.softmax(Q.matmul(K.transpose(-2, -1)) / self.scale, dim=-1)
+        output = attention_weights.matmul(V)
+        
+        return output
+class PenalizedSigmoid:
+    def __init__(self, alpha=0.05):
+        self.alpha = alpha
+    
+    def __call__(self, x):
+        sigm = torch.sigmoid(x)
+        return sigm + self.alpha * sigm * (1 - sigm)
+
+    
+class PenalizedTanh:
+    # This is a activation function that penalizes the output of tanh, it can be used as a replacement of tanh
+    def __init__(self, alpha=0.05):
+        self.alpha = alpha
+    
+    def __call__(self, x):
+        return F.tanh(x) - self.alpha * F.tanh(x)**2
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_features, hidden_features, out_features):
+        super(ResidualBlock, self).__init__()
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.layer_norm1 = nn.LayerNorm(hidden_features)
+
+        self.fc2 = nn.Linear(hidden_features, out_features) 
+        self.layer_norm2 = nn.LayerNorm(out_features)
+
+        self.leaky_relu = nn.LeakyReLU()
+        
+        # 添加一个shortcut层来调整residual的维度（如果需要的话）
+        if in_features != out_features:
+            self.shortcut = nn.Linear(in_features, out_features)
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x):
+        residual = self.shortcut(x)
+        out = self.fc1(x)
+        out = self.layer_norm1(out)
+        out = self.leaky_relu(out)
+        
+        out = self.fc2(out)
+        out = self.layer_norm2(out)
+        
+        out = self.leaky_relu(out + residual)
+        return out
+    
+class GLU(nn.Module):
+    def __init__(self):
+        super(GLU, self).__init__()
+
+    def forward(self, x):
+        # Split the input data into two parts: values and gates
+        values, gates = torch.chunk(x, 2, dim=1)
+        return values * torch.sigmoid(gates)
+
+
 
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
@@ -275,44 +347,35 @@ class Actor(nn.Module):
         self.fc = nn.Linear( 66 * 2 * 2, 256) 
         #66 for the upper, 2 for the both side, upper and lower, 2 for the x and y
         #self.lstm = nn.LSTM(state_dim, 256, 1, batch_first=True)
-        self.attention = actorAttention(256)
-        self.feature_extractor = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Dropout(0.1),  # Dropout for regularization
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1)   # Dropout for regularization
-        )
-        
-        self.layer1 = nn.Linear(256, 512)
-        self.bn1 = nn.BatchNorm1d(512)
-        self.layer2 = nn.Linear(512, 1024)
-        self.bn2 = nn.BatchNorm1d(1024)
-        self.layer3 = nn.Linear(1024, 4096)
-        self.bn3 = nn.BatchNorm1d(4096)
-        self.layer4 = nn.Linear(4096, 512)
-        self.bn4 = nn.BatchNorm1d(512)
-        self.layer5 = nn.Linear(512, 256)
-        self.bn5 = nn.BatchNorm1d(256)
-        self.layer6 = nn.Linear(256, 256)
-        self.bn6 = nn.BatchNorm1d(256)
-        self.dropout = nn.Dropout(0.1)
+        self.attention = ScaledDotProductAttention(256)
 
-        self.layer_action = nn.Linear(256, action_dim)
+
+        
+        self.res_block1 = ResidualBlock(256, 512, 256)
+        self.res_block2 = ResidualBlock(256, 512, 256)
+        #self.res_block3 = ResidualBlock(512, 256, 256)
+        
+        self.glu = GLU()
+
+        self.layer_action = nn.Linear(128, action_dim)
+        
 
         # For action 0
-        self.layer_param1_0 = nn.Linear(256, 128)
-        self.layer_param2_0 = nn.Linear(128, 1)
-        self.layer_param3_0 = nn.Linear(128, 1)
-        self.layer_param4_0 = nn.Linear(128, 1)
+        self.layer_param1_0 = nn.Linear(128, 16)
+        # Then we have glu layer
+        #self.gluAction0 = GLU()
+        self.layer_param2_0 = nn.Linear(16, 1)
+        self.layer_param3_0 = nn.Linear(16, 1)
+        self.layer_param4_0 = nn.Linear(16, 1)
         # For action 1
-        self.layer_param1_1 = nn.Linear(256, 128)
-        self.layer_param2_1 = nn.Linear(128, 1)
+        self.layer_param1_1 = nn.Linear(128, 16)
+        #self.gluAction1 = GLU()
+        self.layer_param2_1 = nn.Linear(16, 1)
 
         # For action 2
-        self.layer_param1_2 = nn.Linear(256, 128)
-        self.layer_param2_2 = nn.Linear(128, 1)
+        self.layer_param1_2 = nn.Linear(128, 16)
+        #self.gluAction2 = GLU()
+        self.layer_param2_2 = nn.Linear(16, 1)
 
         # For action 3
         #self.layer_param1_3 = nn.Linear(256, 128)
@@ -329,52 +392,41 @@ class Actor(nn.Module):
 
     def forward(self, state):
         batch_size = state.size(0)
-        h_t = self.fc(state.reshape(batch_size, -1))
+        x0 = F.relu(self.fc(state.reshape(batch_size, -1)))
+        print("actor_state shape: ", x0.shape)
         #h_t, _ = self.lstm(state)
         #h_t = h_t[:, -1]  # 使用 LSTM 的最后一个输出
-        h_t = self.attention(h_t)
-        h_t = self.feature_extractor(h_t)
+        x1 = self.attention(x0)
+        #h_t = self.feature_extractor(h_t)
         
         
         batch_size = state.size(0)
 
-        #if batch_size > 1:
-         #   h_t = F.relu(self.bn1(self.layer1(h_t)))
-          #  h_t = F.relu(self.bn2(self.layer2(h_t)))
-           # h_t = self.dropout(h_t)
-            #h_t = F.relu(self.bn3(self.layer3(h_t)))
-            #h_t = F.relu(self.bn4(self.layer4(h_t)))
-            #h_t = self.dropout(h_t)
-            #h_t = F.relu(self.bn5(self.layer5(h_t)))
-            #h_t = F.relu(self.bn6(self.layer6(h_t)))
-        #else:
-        h_t = F.relu(self.layer1(h_t))
-        h_t = F.relu(self.layer2(h_t))
-        h_t = self.dropout(h_t)
-        h_t = F.relu(self.layer3(h_t))
-        h_t = F.relu(self.layer4(h_t))
-        h_t = self.dropout(h_t)
-        h_t = F.relu(self.layer5(h_t))
-        h_t = F.relu(self.layer6(h_t))
+        x2 = self.res_block1(x1 + x0)
+        x3 = self.res_block2(x2 + x1)
+        #h_t = self.res_block3(h_t)
 
-
-
-        action_logits = self.layer_action(h_t)
+        x4 = self.glu(x3)
+        #The dimension will be half of the input after the GLU layer
+        
+        action_logits = F.leaky_relu(self.layer_action(x4))
         #action_logits[:, 0] += 1.0
         #action_logits[:, 1] -= 2000.0  # Add negative bias to action 1
         #action_logits[:, 2] -= 2000.0
         action = F.softmax(action_logits, dim=-1)
 
-
-
         Constriant = 0.002
         Lbound = 0
         Rbound = 1
         # 对于每个动作，使用相应的线性层生成参数
-        param1_0 = F.relu(self.layer_param1_0(h_t))
-        param2_0 = Lbound + torch.sigmoid(self.layer_param2_0(param1_0)) * (Rbound -Lbound)
-        param3_0 = Constriant *torch.tanh(self.layer_param2_0(param1_0))
-        param4_0 = Constriant *torch.tanh(self.layer_param3_0(param1_0))
+        penalized_tanh = PenalizedTanh(alpha=0.1)
+        penalized_sigmoid = PenalizedSigmoid(alpha=0.1)
+        param1_0 = F.relu(self.layer_param1_0(x4))
+        #param1_0 = self.gluAction0(x5)
+        
+        param2_0 = Lbound + penalized_sigmoid(self.layer_param2_0(param1_0)) * (Rbound -Lbound)
+        param3_0 = Constriant * penalized_tanh(self.layer_param3_0(param1_0))
+        param4_0 = Constriant * penalized_tanh(self.layer_param4_0(param1_0))
 
         #param1_1 = Lbound + torch.sigmoid(F.relu(self.layer_param1_1(h_t))) * (Rbound - Lbound)
         #param2_1 = Lbound + torch.sigmoid(self.layer_param2_1(param1_1)) * (Rbound -Lbound)
@@ -382,11 +434,12 @@ class Actor(nn.Module):
         #param1_2 = Lbound + torch.sigmoid(F.relu(self.layer_param1_2(h_t))) * (Rbound -Lbound)
         #param2_2 = Lbound + torch.sigmoid(self.layer_param2_2(param1_2)) * (Rbound -Lbound)
 
-        param1_1 = F.relu(self.layer_param1_1(h_t))
-        param2_1 = Constriant *torch.tanh(self.layer_param2_1(param1_1))
+        param1_1 = F.relu(self.layer_param1_1(x4))
+        
+        param2_1 = Constriant * penalized_tanh(self.layer_param2_1(param1_1))
 
-        param1_2 = F.relu(self.layer_param1_2(h_t))
-        param2_2 = Constriant *torch.tanh(self.layer_param2_2(param1_2))
+        param1_2 = F.relu(self.layer_param1_2(x4))
+        param2_2 = Constriant * penalized_tanh(self.layer_param2_2(param1_2))
 
         action_params = [[param2_0, param3_0, param4_0], 
                          [param2_1], 
@@ -399,19 +452,32 @@ class Actor(nn.Module):
     def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
+                # 特定层的初始化
+                if m in [self.layer_param2_0, self.layer_param3_0, self.layer_param2_1, self.layer_param2_2]:
+                    nn.init.xavier_normal_(m.weight)
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+                # 输出action logits的层
+                elif m == self.layer_action:
+                    nn.init.uniform_(m.weight, -0.07, 0.07)
                     nn.init.constant_(m.bias, 0)
+                # 其他层的初始化
+                else:
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+
+
 
 class Attention(nn.Module):
     def __init__(self, input_dim):
         super(Attention, self).__init__()
-        self.linear = nn.Linear(input_dim, 1)
+        self.linear = nn.Linear(input_dim, input_dim)
 
     def forward(self, x):
-        weights = torch.nn.functional.softmax(self.linear(x).squeeze(-1), dim=-1)
-        weighted_average = torch.sum(weights.unsqueeze(-1) * x, dim=1)
-        return weighted_average
+        weights = torch.nn.functional.softmax(self.linear(x), dim=-1)
+        weighted_features = weights * x
+        return weighted_features
 
 
 
@@ -420,41 +486,49 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
 
         # State processing
-        self.state_fc1 = nn.Linear(state_dim, 256)
-        self.state_fc2 = nn.Linear(256, 128)
-        self.bn_state = nn.BatchNorm1d(128)
-        self.attention = Attention(128)
+        self.state_fc1 = nn.Linear(66 * 2 * 2, 256)
+        # 66 for the upper, 2 for the both side, upper and lower, 2 for the x and y
+        
+        self.bn_state = nn.BatchNorm1d(256)
+        self.attention = ScaledDotProductAttention(256) # 32 * 8
         
         # Action processing
-        self.action_fc = nn.Linear(action_dim, 128)
-        self.bn_action = nn.BatchNorm1d(128)
+        self.action_fc = nn.Linear(action_dim, 32)
+        self.bn_action = nn.BatchNorm1d(32) # 32 * 1
 
         # Action parameter processing
         self.action_param_fc1 = nn.Linear(action_dim * action_param_dim, 128)
         self.bn_action_param = nn.BatchNorm1d(128)
+        self.attentionAction = ScaledDotProductAttention(128) # 32 * 4
         
         # Interaction processing
-        self.interaction_fc1 = nn.Linear(128*128, 128)
-        self.interaction_fc2 = nn.Linear(128*128, 128)
-        self.interaction_fc3 = nn.Linear(128*128, 128)
+        self.interaction_fc1 = nn.Linear( 256 * 32, 256)
+        #self.gluInteraction1 = GLU()
+        self.interaction_fc2 = nn.Linear( 32 * 128, 256)
+        #self.gluInteraction2 = GLU()
+        self.interaction_fc3 = nn.Linear( 256 * 128, 256 * 4)
+        #self.gluInteraction3 = GLU()
+        self.interaction_fc = nn.Linear(256 * 6, 128) # 32 * 4
 
         # Fusion and Q-value estimation
-        self.fusion_fc1 = nn.Linear(128 * 6, 256)
+        self.fusion_fc1 = nn.Linear( 32 * 17, 256)
         self.bn_fusion1 = nn.BatchNorm1d(256)
-        self.fusion_fc2 = nn.Linear(256, 256)
-        self.bn_fusion2 = nn.BatchNorm1d(256)
-        self.q_value_fc = nn.Linear(256, 1)
+        self.fusion_fc2 = nn.Linear(256, 32)
+        self.bn_fusion2 = nn.BatchNorm1d(32)
+        self.q_value_fc = nn.Linear(32, 1)
 
         # Dropout layer
-        self.dropout = nn.Dropout(p=0.1)
+        self.dropout = nn.Dropout(p=0.05)
 
         # Initialize weights
         self.apply(self._init_weights)
 
     def forward(self, state, action, action_params):
+        
+        batch_size = state.size(0)
+        state = state.reshape(batch_size, -1)
         # Process state through LSTM and a fully connected layer
-        state = F.elu(self.state_fc1(state))
-        state = F.elu(self.state_fc2(state))
+        state = F.relu(self.state_fc1(state))
         state = self.attention(state)   # Applying attention mechanism
         #state = F.elu(self.state_fc(state))
         #state = self.bn_state(state)
@@ -462,9 +536,12 @@ class Critic(nn.Module):
         
         # Process action through a fully connected layer
         action = action.float()
-        action = F.elu(self.action_fc(action))
-        #action = self.bn_action(action)
+        action = action.reshape(batch_size, -1) 
         #print("critic_action shape: ", action.shape)
+        action = F.relu(self.action_fc(action))
+        #action = self.attentionAction(action)   # Applying attention mechanism
+        #action = self.bn_action(action)
+        #print("critic_action shape after fc: ", action.shape)
         
         # Process action parameters through a fully connected layer
         action_params = action_params.view(-1, action_params.size(-2) * action_params.size(-1))  # Reshape to 2D
@@ -473,24 +550,28 @@ class Critic(nn.Module):
         #print("critic_action_params shape: ", action_params.shape)
         
         # Create interaction terms through outer product operation
-        interaction_term1 = torch.bmm(state[:, :, None], action[:, None, :]).view(-1, 128*128)
-        interaction_term2 = torch.bmm(action[:, :, None], action_params[:, None, :]).view(-1, 128*128)
-        interaction_term3 = torch.bmm(state[:, :, None], action_params[:, None, :]).view(-1, 128*128)
+        interaction_term1 = torch.bmm(state[:, :, None], action[:, None, :]).view(-1, 256 * 32)
+        interaction_term2 = torch.bmm(action[:, :, None], action_params[:, None, :]).view(-1, 32 * 128)
+        interaction_term3 = torch.bmm(state[:, :, None], action_params[:, None, :]).view(-1, 256 * 128)
         
         # Reduce the dimensionality of the interaction terms
-        interaction_term1 = F.elu(self.interaction_fc1(interaction_term1))
-        interaction_term2 = F.elu(self.interaction_fc2(interaction_term2))
-        interaction_term3 = F.elu(self.interaction_fc3(interaction_term3))
+        interaction_term1 = F.relu(self.interaction_fc1(interaction_term1))
+        #interaction_term1 = self.gluInteraction1(interaction_term1)
+        interaction_term2 = F.relu(self.interaction_fc2(interaction_term2))
+        #interaction_term2 = self.gluInteraction2(interaction_term2)
+        interaction_term3 = F.relu(self.interaction_fc3(interaction_term3))
+        #interaction_term3 = self.gluInteraction3(interaction_term3)
+        interaction_term = torch.cat([interaction_term1, interaction_term2, interaction_term3], dim=1)
+        interaction_term = F.relu(self.interaction_fc(interaction_term))
         
         # Concatenate all the features
-        concat_features = torch.cat([state, action, action_params, interaction_term1, interaction_term2, interaction_term3], dim=1)
+        concat_features = torch.cat([state, action, action_params, interaction_term], dim=1)
         # Process the concatenated features through the fusion network
-        fusion = F.elu(self.fusion_fc1(concat_features))
+        fusion = F.relu(self.fusion_fc1(concat_features))
         #fusion = self.bn_fusion1(fusion)
         fusion = self.dropout(fusion)  # Apply dropout
-        fusion = F.elu(self.fusion_fc2(fusion))
+        fusion = F.relu(self.fusion_fc2(fusion))
         #fusion = self.bn_fusion2(fusion)
-        fusion = self.dropout(fusion)  # Apply dropout
         
         # Estimate the Q-value
         q_value = self.q_value_fc(fusion)
@@ -499,7 +580,7 @@ class Critic(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
+            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
@@ -550,17 +631,17 @@ class DDPGAgent:
         self.max_action = max_action
         self.previous_drag = None
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-5)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=8e-3)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=5e-4)
         #Here we use the Twin from the Twin delayed DDPG algorithm
-        self.criticTwin_optimizer = optim.Adam(self.criticTwin.parameters(), lr=4e-3)
+        self.criticTwin_optimizer = optim.Adam(self.criticTwin.parameters(), lr=2e-4)
         self.noiseAction = OUNoise(action_dim=3, sigma= 0.001) # for action
         self.noise_0 = OUNoise(action_dim=3) # for param2_0, param3_0
         self.noise_3 = OUNoise(action_dim=1) # for param2_3
         self.noise_4 = OUNoise(action_dim=1) # for param2_4
         self.epsilon = 1.0  # initial exploration rate
-        self.epsilon_min = 0.01  # minimum exploration rate
-        self.epsilon_decay = 0.99
-        self.bias_for_action_0 = 0.8 #give a bias(more) for action 0
+        self.epsilon_min = 0.1  # minimum exploration rate
+        self.epsilon_decay = 0.9
+        self.bias_for_action_0 = 0.5 #give a bias(more) for action 0
 
         #self.noise_scale = 0.005
         #self.noise_reduction_factor = 0.85
@@ -575,7 +656,7 @@ class DDPGAgent:
         self.actor_target = copy.deepcopy(actor).to(device)
         self.critic_target = copy.deepcopy(critic).to(device)
         self.criticTwin_target = copy.deepcopy(critic).to(device)
-        self.tauTrain = 0.005
+        self.tauTrain = 0.01
         self.update_frequencyTrain = 2
         self.accumlateReward = [0, 0, 0, 0]
         
@@ -611,7 +692,10 @@ class DDPGAgent:
                 action_probs = action_probs / action_probs.sum()
             else:
                 action_probs = action_probs + action_noise * 1
-                action_probs = action_probs / action_probs.sum()               
+                action_probs = action_probs / action_probs.sum()   
+                epsilon = 5.0e-2  # 小的正值，用来防止 log(0)
+                action_probs = torch.clamp(action_probs, min=epsilon, max=1-epsilon)  # 裁剪概率值  
+                action_probs = action_probs / action_probs.sum()          
         
             # 打印动作概率
             print("Action probabilities after noise:", action_probs)
@@ -683,22 +767,33 @@ class DDPGAgent:
             # param_limits = {0: [(-limit_1, limit_1), (-limit_2, limit_2), (-limit_3, limit_3)], 
             #                 3: [(-limit_4, limit_4)], 
             #                 4: [(-limit_5, limit_5)]}
+            # And more generally, we consider the positve and negative separately
+            # For point near to the end point, we multiplicate abs(1 - action_params4execute[0]) * abs(action_params4execute[0]) to avoid parameters out of range
             param_limits = {
-                0: [(0.0, 1.0), (-0.005, 0.005), (-0.005, 0.005)],
+                0: [(0.02, 0.99), (-0.005, 0.005), (-0.005, 0.005)],
                 1: [(-0.002, 0.002)],
                 2: [(-0.002, 0.002)]
             }
-            threshold = 0.05
+            threshold = 0.15
             if action4execute in param_limits:
                 for i, (min_val, max_val) in enumerate(param_limits[action4execute]):
                     if action4execute == 0 and (action_params4execute[0] >= 1 - threshold or action_params4execute[0] <= threshold  ) and i != 0:
-                        action_params4execute[i] = np.clip(action_params4execute[i], min_val  * abs(1 - action_params4execute[0]) * abs(action_params4execute[0]), max_val  * abs(1 - action_params4execute[0]) * abs(action_params4execute[0]))
-                        action_params[action4execute][i] = action_params4execute[i]
-                    action_params4execute[i] = np.clip(action_params4execute[i], min_val, max_val)
-                    action_params[action4execute][i] = action_params4execute[i]
-            
+                        if action_params4execute[i] > 0:
+                            action_params4execute[i] = np.clip(action_params4execute[i], 0.08 * max_val  * abs(1 - action_params4execute[0]) * abs(action_params4execute[0]), max_val  * abs(1 - action_params4execute[0]) * abs(action_params4execute[0]))
+                            action_params[action4execute][i] = action_params4execute[i]
+                        else:
+                            action_params4execute[i] = np.clip(action_params4execute[i], min_val  * abs(1 - action_params4execute[0]) * abs(action_params4execute[0]), 0.08 * max_val  * abs(1 - action_params4execute[0]) * abs(action_params4execute[0]))
+                            action_params[action4execute][i] = action_params4execute[i]
+                    
+                    else:       
+                        if action_params4execute[i] > 0:
+                            action_params4execute[i] = np.clip(action_params4execute[i], 0.3 * max_val, max_val)
+                            action_params[action4execute][i] = action_params4execute[i]
+                        else:
+                            action_params4execute[i] = np.clip(action_params4execute[i], min_val, 0.3 * min_val)
+                            action_params[action4execute][i] = action_params4execute[i]
             print("Parameters after noise and clipping:", action_params4execute)
-            action_params[action4execute]
+            
 
         return action4execute, action_params4execute ,action_probs, action_params
 
@@ -710,9 +805,9 @@ class DDPGAgent:
         total_distance = calculate_total_distance(total_points_list)
     
         # 如果 total_distance 超出范围，返回一个惩罚值
-        if not (2.0 <= total_distance <= 3.6):
+        if not (1.9 <= total_distance <= 3.6):
             print(f"total_distance = {total_distance}")
-            return -10
+            return -6.0
 
         # 否则，根据您的原始计算返回奖励
         if self.previous_drag is None:
@@ -764,7 +859,7 @@ class DDPGAgent:
         return batch_action_params_padded
 
 
-    def train(self, iterations, agentIndex, batch_size, action_param_dim=3,discount=0.99, tau=0.005):
+    def train(self, iterations, agentIndex, batch_size, action_param_dim=3,discount=0.96, tau=0.005):
         print("Entered the train method.")
         
         for it in range(iterations):
@@ -835,7 +930,7 @@ class DDPGAgent:
                 batch_states = torch.cat(batch_states, dim=0).to(device)
                 batch_next_states = torch.cat(batch_next_states, dim=0).to(device)
                 print("batch_states shape: ", batch_states.shape)
-                #print("batch_next_states shape: ", batch_next_states.shape)
+                print("batch_next_states shape: ", batch_next_states.shape)
                 # Convert actions and rewards lists to tensors
                 # print("batch_actions shape before reshaping: ", batch_actions.shape)
                 batch_actions = torch.stack(batch_actions).squeeze().to(device)
@@ -895,7 +990,7 @@ class DDPGAgent:
                 if it % self.updateActor_frequency == 0:
                     new_actions, new_action_params = self.actor(batch_states)
                     new_action_params_padded = self.pad_actor_action_params(batch_size4actor, new_action_params)
-                    actor_loss = -self.critic(batch_states, new_actions, new_action_params_padded).mean() - 10.0 * entropy 
+                    actor_loss = -self.critic(batch_states, new_actions, new_action_params_padded).mean() - 2.0 * entropy 
                     
                     # Optimize the actor
                     self.actor_optimizer.zero_grad()
