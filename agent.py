@@ -410,9 +410,6 @@ class Actor(nn.Module):
         #The dimension will be half of the input after the GLU layer
         
         action_logits = F.leaky_relu(self.layer_action(x4))
-        #action_logits[:, 0] += 1.0
-        #action_logits[:, 1] -= 2000.0  # Add negative bias to action 1
-        #action_logits[:, 2] -= 2000.0
         action = F.softmax(action_logits, dim=-1)
 
         Constriant = 0.002
@@ -424,9 +421,10 @@ class Actor(nn.Module):
         param1_0 = F.relu(self.layer_param1_0(x4))
         #param1_0 = self.gluAction0(x5)
         
-        param2_0 = Lbound + penalized_sigmoid(self.layer_param2_0(param1_0)) * (Rbound -Lbound)
-        param3_0 = Constriant * penalized_tanh(self.layer_param3_0(param1_0))
-        param4_0 = Constriant * penalized_tanh(self.layer_param4_0(param1_0))
+        # This detach is to remove the gradient calculation of sigmoid and tanh, since this is the physical constraint, we do not want it to influence the gradient calculation, which may lead to the gradient disappear
+        param2_0 = Lbound + penalized_sigmoid(self.layer_param2_0(param1_0.detach())) * (Rbound -Lbound)
+        param3_0 = Constriant * penalized_tanh(self.layer_param3_0(param1_0.detach()))
+        param4_0 = Constriant * penalized_tanh(self.layer_param4_0(param1_0.detach()))
 
         #param1_1 = Lbound + torch.sigmoid(F.relu(self.layer_param1_1(h_t))) * (Rbound - Lbound)
         #param2_1 = Lbound + torch.sigmoid(self.layer_param2_1(param1_1)) * (Rbound -Lbound)
@@ -436,10 +434,10 @@ class Actor(nn.Module):
 
         param1_1 = F.relu(self.layer_param1_1(x4))
         
-        param2_1 = Constriant * penalized_tanh(self.layer_param2_1(param1_1))
+        param2_1 = Constriant * penalized_tanh(self.layer_param2_1(param1_1.detach()))
 
         param1_2 = F.relu(self.layer_param1_2(x4))
-        param2_2 = Constriant * penalized_tanh(self.layer_param2_2(param1_2))
+        param2_2 = Constriant * penalized_tanh(self.layer_param2_2(param1_2.detach()))
 
         action_params = [[param2_0, param3_0, param4_0], 
                          [param2_1], 
@@ -453,7 +451,7 @@ class Actor(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 # 特定层的初始化
-                if m in [self.layer_param2_0, self.layer_param3_0, self.layer_param2_1, self.layer_param2_2]:
+                if m in [self.layer_param2_0, self.layer_param3_0, self.layer_param4_0, self.layer_param2_1, self.layer_param2_2]:
                     nn.init.xavier_normal_(m.weight)
                     if m.bias is not None:
                         nn.init.constant_(m.bias, 0)
@@ -518,7 +516,7 @@ class Critic(nn.Module):
         self.q_value_fc = nn.Linear(32, 1)
 
         # Dropout layer
-        self.dropout = nn.Dropout(p=0.05)
+        self.dropout = nn.Dropout(p=0.02)
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -640,7 +638,7 @@ class DDPGAgent:
         self.noise_4 = OUNoise(action_dim=1) # for param2_4
         self.epsilon = 1.0  # initial exploration rate
         self.epsilon_min = 0.1  # minimum exploration rate
-        self.epsilon_decay = 0.9
+        self.epsilon_decay = 0.999
         self.bias_for_action_0 = 0.5 #give a bias(more) for action 0
 
         #self.noise_scale = 0.005
@@ -682,7 +680,7 @@ class DDPGAgent:
             action_noise = torch.tensor(self.noiseAction.sample()).to(device)
             print("Action probabilities before noise:", action_probs)
             if explore:
-                action_probs = action_probs + action_noise * 10
+                action_probs = action_probs + action_noise * 100
                 print("noise :", action_noise)  
                  # 给动作0增加一个偏置
                 action_probs[0][0] += self.bias_for_action_0
@@ -691,7 +689,7 @@ class DDPGAgent:
                 # 确保概率和为1
                 action_probs = action_probs / action_probs.sum()
             else:
-                action_probs = action_probs + action_noise * 1
+                action_probs = action_probs + action_noise * 10
                 action_probs = action_probs / action_probs.sum()   
                 epsilon = 5.0e-2  # 小的正值，用来防止 log(0)
                 action_probs = torch.clamp(action_probs, min=epsilon, max=1-epsilon)  # 裁剪概率值  
