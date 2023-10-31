@@ -68,20 +68,35 @@ def adjust_point(data_points_upper, data_points_lower, x_target, y_change_upper,
         if point[0] == x_target:
             old_value_lower = data_points_lower[i][1]
             new_value_lower = old_value_lower + y_change_lower
-    if new_value_upper <= new_value_lower:
-        print(f"警告：在 {x_target} 处的调整导致上半曲线的 y 值小于或等于下半曲线的 y >值。这次调整将被忽略。")
-        warning_occurred = True
-        return data_points_upper, data_points_lower, warning_occurred
+            
+    if x_target > 0.2 and x_target < 0.8:
+        if new_value_upper <= new_value_lower + 0.07:
+            print(f"警告：在 {x_target} 处的调整导致thickness小于0.07。这次调整将被忽略。")
+            warning_occurred = True
+            return data_points_upper, data_points_lower, warning_occurred
+        else:
+            for i, point in enumerate(data_points_upper):
+                if point[0] == x_target:
+                    data_points_upper[i][1] = new_value_upper
+                    print(f"上半曲线点 ({x_target}, {old_value_upper}) 的 y 值被调整为 {new_value_upper}")
+            for i, point in enumerate(data_points_lower):
+                if point[0] == x_target:
+                    data_points_lower[i][1] = new_value_lower
+                    print(f"下半曲线点 ({x_target}, {old_value_lower}) 的 y 值被调整为 {new_value_lower}")
     else:
-        for i, point in enumerate(data_points_upper):
-            if point[0] == x_target:
-                data_points_upper[i][1] = new_value_upper
-                print(f"上半曲线点 ({x_target}, {old_value_upper}) 的 y 值被调整为 {new_value_upper}")
-        for i, point in enumerate(data_points_lower):
-            if point[0] == x_target:
-                data_points_lower[i][1] = new_value_lower
-                print(f"下半曲线点 ({x_target}, {old_value_lower}) 的 y 值被调整为 {new_value_lower}")
-
+        if new_value_upper <= new_value_lower + 0.2*(x_target)(1-x_target):
+                print(f"警告：在 {x_target} 处的调整导致上半曲线的 y 值小于或等于下半曲线的 y >值。这次调整将被忽略。")
+                warning_occurred = True
+                return data_points_upper, data_points_lower, warning_occurred
+        else:
+            for i, point in enumerate(data_points_upper):
+                if point[0] == x_target:
+                    data_points_upper[i][1] = new_value_upper
+                    print(f"上半曲线点 ({x_target}, {old_value_upper}) 的 y 值被调整为 {new_value_upper}")
+            for i, point in enumerate(data_points_lower):
+                if point[0] == x_target:
+                    data_points_lower[i][1] = new_value_lower
+                    print(f"下半曲线点 ({x_target}, {old_value_lower}) 的 y 值被调整为 {new_value_lower}")
     return data_points_upper, data_points_lower, warning_occurred  # 在函数的末尾返回
 
 

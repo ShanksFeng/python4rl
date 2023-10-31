@@ -8,6 +8,7 @@ import shutil
 import torch
 import numpy as np
 import torch.nn as nn
+from torch.nn.utils import clip_grad_value_
 
 class OUNoise:
     def __init__(self, action_dim, mu=0.0, theta=0.15, sigma=0.0005):
@@ -254,6 +255,7 @@ for agentIndex, agent in enumerate(agents):
         print(f"For the agent index = : {agentIndex}")
         print(f"Episode reward: {episode_reward}")
         #agent.update_epsilon()
+        
 
         writers[agentIndex].add_scalar('Metrics/Reward', reward, episode * initial_timesteps + initial_timesteps - 1)
         writers[agentIndex].add_scalar('Metrics/Entropy', entropy, episode * initial_timesteps + initial_timesteps - 1)
@@ -420,10 +422,10 @@ for agentIndex, agent in enumerate(agents):
             # Train the agent
             print(f"Size of replay buffer: {len(agent.replay_buffer.storage)}")
             if len(agent.replay_buffer.storage) >= batch_size:
-                actor_loss, critic_loss = agent.train(iterations=3, agentIndex = agentIndex, batch_size = batch_size)
+                actor_loss, critic_loss, vae_loss = agent.train(iterations=3, agentIndex = agentIndex, batch_size = batch_size)
                 writers[agentIndex].add_scalar('Losses/Actor_Loss', actor_loss,  episode * second_timesteps + t)
                 writers[agentIndex].add_scalar('Losses/Critic_Loss', critic_loss, episode * second_timesteps + t)
-               
+                writers[agentIndex].add_scalar('Losses/vae_Loss', vae_loss, episode * second_timesteps + t)
             # Additional metrics recorded at each time step
             writers[agentIndex].add_scalar('Metrics/Reward', reward, Previous_step + episode * second_timesteps + t)
             writers[agentIndex].add_scalar('Metrics/Entropy', entropy, Previous_step + episode * second_timesteps + t)
@@ -475,6 +477,11 @@ for agentIndex, agent in enumerate(agents):
                 
         print(f"For the agent index = : {agentIndex}")
         print(f"Episode reward: {episode_reward}")
+        
+        agent.critic_scheduler.step()
+        agent.criticTwin_scheduler.step()
+        agent.actor_scheduler.step()
+        agent.vae_scheduler.step()
 
         writers[agentIndex].add_scalar('Metrics/Reward', reward, Previous_step + episode * second_timesteps + second_timesteps - 1)
         writers[agentIndex].add_scalar('Metrics/Entropy', entropy, Previous_step + episode * second_timesteps + second_timesteps - 1)
@@ -482,6 +489,7 @@ for agentIndex, agent in enumerate(agents):
         if len(agent.replay_buffer) >= batch_size:
             writers[agentIndex].add_scalar('Losses/Actor_Loss', actor_loss, episode * second_timesteps + second_timesteps - 1)
             writers[agentIndex].add_scalar('Losses/Critic_Loss', critic_loss, episode * second_timesteps + second_timesteps - 1)
+            writers[agentIndex].add_scalar('Losses/vae_Loss', vae_loss, episode * second_timesteps + second_timesteps - 1)
         agent.update_epsilon()
         # 在循环结束时记录权重和梯度
         for name, param in agent.actor.named_parameters():
@@ -639,9 +647,10 @@ for episode in range(num_episodes):
             # Train the agent
             print(f"Size of replay buffer: {len(agent.replay_buffer.storage)}")
             if len(agent.replay_buffer.storage) >= batch_size:
-                actor_loss, critic_loss = agent.train(iterations=3, agentIndex = agentIndex, batch_size = batch_size)
+                actor_loss, critic_loss, vae_loss = agent.train(iterations=3, agentIndex = agentIndex, batch_size = batch_size)
                 writers[agentIndex].add_scalar('Losses/Actor_Loss', actor_loss, totalSecondStep + episode * max_timesteps + t)
                 writers[agentIndex].add_scalar('Losses/Critic_Loss', critic_loss, totalSecondStep + episode * max_timesteps + t)
+                writers[agentIndex].add_scalar('Losses/vae_Loss', vae_loss, totalSecondStep + episode * max_timesteps + t)
 
             # Additional metrics recorded at each time step
             writers[agentIndex].add_scalar('Metrics/Reward', reward, Previous_step + totalSecondStep + episode * max_timesteps + t)
@@ -682,6 +691,11 @@ for episode in range(num_episodes):
             
         print(f"For the agent index = : {agentIndex}")
         print(f"Episode reward: {episode_reward}")
+        
+        agent.critic_scheduler.step()
+        agent.criticTwin_scheduler.step()
+        agent.actor_scheduler.step()
+        agent.vae_scheduler.step()
 
         writers[agentIndex].add_scalar('Metrics/Reward', reward, Previous_step + totalSecondStep + episode * max_timesteps + max_timesteps - 1)
         writers[agentIndex].add_scalar('Metrics/Entropy', entropy,Previous_step + totalSecondStep + episode * max_timesteps + max_timesteps - 1)
@@ -689,6 +703,7 @@ for episode in range(num_episodes):
         if len(agent.replay_buffer) >= batch_size:
             writers[agentIndex].add_scalar('Losses/Actor_Loss', actor_loss, totalSecondStep + episode * max_timesteps + max_timesteps - 1)
             writers[agentIndex].add_scalar('Losses/Critic_Loss', critic_loss, totalSecondStep + episode * max_timesteps + max_timesteps - 1)
+            writers[agentIndex].add_scalar('Losses/vae_Loss', vae_loss, totalSecondStep + episode * max_timesteps + max_timesteps - 1)
         # 在循环结束时记录权重和梯度
         for name, param in agent.actor.named_parameters():
             writers[agentIndex].add_histogram(f'Weights/{name}', param.clone().cpu().data.numpy(), Previous_step + totalSecondStep + episode * max_timesteps + max_timesteps - 1)
