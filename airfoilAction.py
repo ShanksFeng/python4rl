@@ -69,9 +69,9 @@ def adjust_point(data_points_upper, data_points_lower, x_target, y_change_upper,
             old_value_lower = data_points_lower[i][1]
             new_value_lower = old_value_lower + y_change_lower
             
-    if x_target > 0.2 and x_target < 0.8:
-        if new_value_upper <= new_value_lower + 0.07:
-            print(f"警告：在 {x_target} 处的调整导致thickness小于0.07。这次调整将被忽略。")
+    if x_target > 0.1 and x_target < 0.8:
+        if new_value_upper <= new_value_lower + 0.01:
+            print(f"警告：在 {x_target} 处的调整导致thickness小于0.03。这次调整将被忽略。")
             warning_occurred = True
             return data_points_upper, data_points_lower, warning_occurred
         else:
@@ -84,7 +84,7 @@ def adjust_point(data_points_upper, data_points_lower, x_target, y_change_upper,
                     data_points_lower[i][1] = new_value_lower
                     print(f"下半曲线点 ({x_target}, {old_value_lower}) 的 y 值被调整为 {new_value_lower}")
     else:
-        if new_value_upper <= new_value_lower + 0.2*(x_target)(1-x_target):
+        if new_value_upper <= new_value_lower + min(0.2*(x_target)*(1-x_target), 0.01):
                 print(f"警告：在 {x_target} 处的调整导致上半曲线的 y 值小于或等于下半曲线的 y >值。这次调整将被忽略。")
                 warning_occurred = True
                 return data_points_upper, data_points_lower, warning_occurred
@@ -143,12 +143,13 @@ def closest_point(a, points):
     closest_x = min(points, key=lambda x: abs(x[0] - a))
     return closest_x[0]  # 返回 x 坐标
 
-def perform_action(filepath, action, action_params):
+def perform_action(filepath, action, action_params, baselinepath):
     with open(filepath, 'r') as file:
         data = file.readlines()
     warning_occurred = False
     upper_half_points = []
     lower_half_points = []
+
     current_section = 0  # 0 for header, 1 for upper half, 2 for lower half
 
     for i, line in enumerate(data):
@@ -175,6 +176,38 @@ def perform_action(filepath, action, action_params):
             upper_half_points.append([x, y])
         elif current_section == 2:
             lower_half_points.append([x, y])
+        else:
+            print(f"警告：忽略了行 '{line}', 因为它在未预期的位置")
+            
+    with open(baselinepath, 'r') as baselinefile:
+        basedata = baselinefile.readlines()
+    baseline_upper = []
+    baseline_lower = []
+    baseline_section = 0
+    for i, line in enumerate(basedata):
+        line = line.strip()
+
+        if line == '':
+            baseline_section += 1
+            continue
+
+        if baseline_section == 0:
+            continue  # Ignore the header lines
+
+        if len(line.split()) != 2:
+            print(f"警告：跳过了行 '{line}', 因为它不含有正好两个元素")
+            continue
+
+        try:
+            x, y = map(float, line.split())
+        except ValueError:
+            print(f"警告：跳过了行 '{line}', 因为它不含有能转换为浮点数的元素")
+            continue
+
+        if baseline_section == 1:
+            baseline_upper.append([x, y])
+        elif baseline_section == 2:
+            baseline_upper.append([x, y])
         else:
             print(f"警告：忽略了行 '{line}', 因为它在未预期的位置")
 

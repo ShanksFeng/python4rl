@@ -17,6 +17,7 @@ from config import device
 from torch.optim import lr_scheduler
 from torch.nn.utils import clip_grad_norm_
 from sklearn.preprocessing import StandardScaler
+from bezierFit import fit_bezier_curves
 
 def custom_min(q1, q2):
     abs_q1 = torch.abs(q1)
@@ -32,12 +33,14 @@ def calculate_entropy(probabilities):
     entropy = - torch.sum(probabilities * log_probabilities, dim=-1)  # 计算熵
     return entropy
 
+    
+
 class OUNoise:
-    def __init__(self, action_dim, mu=0.0, theta=0.15, sigma=0.0005):
-        self.action_dim = action_dim
+    def __init__(self, mu=0, theta=0.15, sigma=0.2):
         self.mu = mu
         self.theta = theta
-        self.sigma = sigma
+        self.sigma = np.array(sigma) if isinstance(sigma, list) else np.array([sigma])
+        self.action_dim = len(self.sigma)
         self.state = np.ones(self.action_dim) * self.mu
         self.reset()
 
@@ -46,7 +49,7 @@ class OUNoise:
 
     def sample(self):
         x = self.state
-        dx = self.theta * (self.mu - x) + self.sigma * np.random.randn(len(x))
+        dx = self.theta * (self.mu - x) + self.sigma * np.random.randn(self.action_dim)
         self.state = x + dx
         return self.state
 
@@ -96,6 +99,70 @@ def save_opposite_state(mesh_filepath, airfoil_data_filepath, mapping_filepath, 
     shutil.copy(mesh_filepath, opposite_mesh_filepath)
     shutil.copy(airfoil_data_filepath, opposite_airfoil_data_filepath)  
     shutil.copy(mapping_filepath, opposite_mapping_filepath)
+    
+def save_historyInfo(mesh_filepath, airfoil_data_filepath, bodyDx, rhoDx, rhoUDx, rhoVDx, eDx,epochIndex, agentIndex):
+    """
+    Save the current file for current epoch to the history during iteration
+    """
+     # Paths to the best reward state files
+    print("Save current and step to next epoch")
+    history_mesh_filepath = f"./historyOpt/epoch{epochIndex}/body.mesh"
+    history_airfoil_data_filepath = f"./historyOpt/epoch{epochIndex}/airfoil.dat"
+    history_bodyDx = f"./historyOpt/epoch{epochIndex}/body.dx"
+    history_rhoDx = f"./historyOpt/epoch{epochIndex}/rho_h.dx"
+    history_rhoUDx = f"./historyOpt/epoch{epochIndex}/rho_u_h.dx"
+    history_rhoVDx = f"./historyOpt/epoch{epochIndex}/rho_v_h.dx"
+    history_eDx = f"./historyOpt/epoch{epochIndex}/e_h.dx"
+
+    # Ensure the directories exist before copying files
+    os.makedirs(os.path.dirname(history_mesh_filepath), exist_ok=True)
+    os.makedirs(os.path.dirname(history_airfoil_data_filepath), exist_ok=True)
+    os.makedirs(os.path.dirname(history_bodyDx), exist_ok=True)
+    os.makedirs(os.path.dirname(history_rhoDx), exist_ok=True)
+    os.makedirs(os.path.dirname(history_rhoUDx), exist_ok=True)
+    os.makedirs(os.path.dirname(history_rhoVDx), exist_ok=True)
+    os.makedirs(os.path.dirname(history_eDx), exist_ok=True)
+
+    # Copy the current files to the opposite state files
+    shutil.copy(mesh_filepath, history_mesh_filepath)
+    shutil.copy(airfoil_data_filepath, history_airfoil_data_filepath)
+    shutil.copy(bodyDx, history_bodyDx)
+    shutil.copy(rhoDx, history_rhoDx)
+    shutil.copy(rhoUDx, history_rhoUDx)
+    shutil.copy(rhoVDx, history_rhoVDx)
+    shutil.copy(eDx, history_eDx)    
+    
+def save_historyInfoPhase3(mesh_filepath, airfoil_data_filepath, bodyDx, rhoDx, rhoUDx, rhoVDx, eDx,epochIndex, agentIndex, folder_count):
+    """
+    Save the current file for current epoch to the history during iteration
+    """
+     # Paths to the best reward state files
+    print("Save current and step to next epoch")
+    history_mesh_filepath = f"./historyOpt/Phase3epoch_{folder_count}/body.mesh"
+    history_airfoil_data_filepath = f"./historyOpt/Phase3epoch_{folder_count}/airfoil.dat"
+    history_bodyDx = f"./historyOpt/Phase3epoch_{folder_count}/body.dx"
+    history_rhoDx = f"./historyOpt/Phase3epoch_{folder_count}/rho_h.dx"
+    history_rhoUDx = f"./historyOpt/Phase3epoch_{folder_count}/rho_u_h.dx"
+    history_rhoVDx = f"./historyOpt/Phase3epoch_{folder_count}/rho_v_h.dx"
+    history_eDx = f"./historyOpt/Phase3epoch_{folder_count}/e_h.dx"
+
+    # Ensure the directories exist before copying files
+    os.makedirs(os.path.dirname(history_mesh_filepath), exist_ok=True)
+    os.makedirs(os.path.dirname(history_airfoil_data_filepath), exist_ok=True)
+    os.makedirs(os.path.dirname(history_bodyDx), exist_ok=True)
+    os.makedirs(os.path.dirname(history_rhoDx), exist_ok=True)
+    os.makedirs(os.path.dirname(history_rhoUDx), exist_ok=True)
+    os.makedirs(os.path.dirname(history_rhoVDx), exist_ok=True)
+    os.makedirs(os.path.dirname(history_eDx), exist_ok=True)
+
+    # Copy the current files to the opposite state files
+    shutil.copy(mesh_filepath, history_mesh_filepath)
+    shutil.copy(airfoil_data_filepath, history_airfoil_data_filepath)
+    shutil.copy(bodyDx, history_bodyDx)
+    shutil.copy(rhoDx, history_rhoDx)
+    shutil.copy(rhoUDx, history_rhoUDx)
+    shutil.copy(rhoVDx, history_rhoVDx)
+    shutil.copy(eDx, history_eDx) 
     
 def reload_opposite_state(mesh_filepath, airfoil_data_filepath, mapping_filepath, agentIndex):
     """
@@ -313,7 +380,11 @@ class ResidualBlock(nn.Module):
         super(ResidualBlock, self).__init__()
         self.fc1 = nn.Linear(in_features, hidden_features)
         self.layer_norm1 = nn.LayerNorm(hidden_features)
+        self.fc1x = nn.Linear(hidden_features, 2 * hidden_features)
+        self.layer_norm1x = nn.LayerNorm(2 * hidden_features)
 
+        self.fc2x = nn.Linear(2 * hidden_features, hidden_features)
+        self.layer_norm2x = nn.LayerNorm( hidden_features)
         self.fc2 = nn.Linear(hidden_features, out_features) 
         self.layer_norm2 = nn.LayerNorm(out_features)
 
@@ -330,7 +401,13 @@ class ResidualBlock(nn.Module):
         out = self.fc1(x)
         out = self.layer_norm1(out)
         out = self.leaky_relu(out)
+        out = self.fc1x(out)
+        out = self.layer_norm1x(out)
+        out = self.leaky_relu(out)
         
+        out = self.fc2x(out)
+        out = self.layer_norm2x(out)
+        out = self.leaky_relu(out)
         out = self.fc2(out)
         out = self.layer_norm2(out)
         
@@ -351,9 +428,9 @@ class VAE(nn.Module):
         super(VAE, self).__init__()
         
         # Encoder
-        self.fc1 = nn.Linear(66 * 2 * 4 , 1024) # 66 * 2 * 2 for state 66 * 2 for thickness and location
-        self.fc21 = nn.Linear(1024, latent_dim)  # mean
-        self.fc22 = nn.Linear(1024, latent_dim)  # log variance
+        self.fc1 = nn.Linear(66 * 2 * 4 , 2048) # 66 * 2 * 2 for state 66 * 2 for thickness and location
+        self.fc21 = nn.Linear(2048, latent_dim)  # mean
+        self.fc22 = nn.Linear(2048, latent_dim)  # log variance
         
         # Decoder
         self.fc3 = nn.Linear(latent_dim, 1024)
@@ -403,11 +480,37 @@ class VAE(nn.Module):
 
 # Loss for VAE: reconstruction loss + KL divergence
 def loss_function(recon_x, x, mu, logvar):
-    print("recon_x shape: ", recon_x.shape)
-    print("x shape: ", x.shape)
-    BCE = F.binary_cross_entropy(recon_x, x, reduction='sum')
+    #print("recon_x shape: ", recon_x.shape)
+    #print("x shape: ", x.shape)
+    MSE = F.mse_loss(recon_x, x, reduction='sum')
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return BCE + KLD
+    print("MSE: ", MSE)
+    print("KLD: ", KLD)
+    return MSE + KLD
+
+class ControlPointsAttention(nn.Module):
+    def __init__(self, feature_dim = 2, attention_dim = 2):
+        super(ControlPointsAttention, self).__init__()
+        self.feature_dim = feature_dim
+        self.attention_dim = attention_dim
+        self.query = nn.Linear(feature_dim, attention_dim)
+        self.key = nn.Linear(feature_dim, attention_dim)
+        self.value = nn.Linear(feature_dim, attention_dim)
+        
+    def forward(self, x):
+        # x 的形状为 [num_control_points, features]
+        Q = self.query(x)  # [num_control_points, attention_dim]
+        K = self.key(x)    # [num_control_points, attention_dim]
+        V = self.value(x)  # [num_control_points, attention_dim]
+        
+        # 计算注意力分数
+        attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / self.attention_dim**0.5
+        attention_weights = F.softmax(attention_scores, dim=-1)
+        
+        # 应用注意力权重
+        weighted_V = torch.matmul(attention_weights, V)
+        
+        return weighted_V, attention_weights
 
 
 class Actor(nn.Module):
@@ -416,25 +519,19 @@ class Actor(nn.Module):
 
         #self.fc = nn.Linear( 66 * 2 * 2, 256) 
         #66 for the upper, 2 for the both side, upper and lower, 2 for the x and y
-        #self.lstm = nn.LSTM(state_dim, 256, 1, batch_first=True)
-        #self.attention = ScaledDotProductAttention(256)
-        #self.fc2 = nn.Linear(256, 256)
-        self.vae = VAE( 66 * 2 * 2 , 2048)
-        self.norm1 = nn.LayerNorm(2048)
-        self._initialize_vae_weights()
-        
-        self.res_block1 = ResidualBlock(2048, 4096, 2048)
-        
-        #self.res_block2 = ResidualBlock(2048, 4096, 2048)
-        
-        #self.glu = GLU()
-        #self.res_block3 = ResidualBlock(512, 256, 256)
-        
-        self.fc = nn.Linear(2048, 512)
-        self.norm2 = nn.LayerNorm(512)
 
-        self.layer_action = nn.Linear(512, action_dim)
-        self.layer_action_param = nn.Linear(512, 128)
+        self.attention = ControlPointsAttention(feature_dim=2, attention_dim = 2)
+
+        
+        self.res_block1 = ResidualBlock(60, 1024, 60)
+        self.res_block2 = ResidualBlock(60, 512, 60)
+        
+        self.norm1 = nn.LayerNorm(60)
+        self.fc = nn.Linear(60, 256)
+        self.norm2 = nn.LayerNorm(256)
+
+        self.layer_action = nn.Linear(256, action_dim)
+        self.layer_action_param = nn.Linear(256, 128)
         
 
         # For action 0
@@ -454,14 +551,6 @@ class Actor(nn.Module):
         #self.gluAction2 = GLU()
         self.layer_param2_2 = nn.Linear(16, 1)
 
-        # For action 3
-        #self.layer_param1_3 = nn.Linear(256, 128)
-        #self.layer_param2_3 = nn.Linear(128, 1)
-
-        # For action 4
-        #self.layer_param1_4 = nn.Linear(256, 128)
-        #self.layer_param2_4 = nn.Linear(128, 1)
-
         self.max_action = max_action
 
         # Initialize weights
@@ -471,30 +560,24 @@ class Actor(nn.Module):
         batch_size = state.size(0)
         
         ActorState = state
-        print("actor_state shape: ", ActorState.shape)
+        #print("actor_state shape: ", ActorState.shape)
+        attention_output, attention_weights = self.attention(ActorState)                 
+        enhanced_features = ActorState + attention_output
+        flat_features = enhanced_features.view(batch_size, -1)
         
-        recon_state, mu, logvar = self.vae(ActorState)
-        saved_recon_state, saved_mu, saved_logvar = recon_state, mu, logvar
-        recon_state = recon_state.detach()
-        mu = mu.detach()
-        logvar = logvar.detach()
-        # mu for the mean while logvar for the latent variance
+        z0 = F.selu(self.res_block1(flat_features))
+        x0 = F.selu(self.res_block2(z0))
         
-        x0 = F.selu(self.res_block1(mu))
-        #x1 = F.gelu(self.res_block2(x0 + logvar))
-        #x2 = self.glu(x1 + logvar)
-        
-        x1 =self.norm2(F.selu(self.fc(self.norm1(x0 + mu))))     
-        #The dimension will be half of the input after the GLU layer
+        x1 =self.norm2(F.selu(self.fc(self.norm1(x0))))     
     
         
         action_logits = F.selu(self.layer_action(x1))
-        action_logits[:, 0] += 2.0
+        action_logits[:, 0] += 10.0
         action = F.softmax(action_logits, dim=-1)
         
         x2 = F.selu(self.layer_action_param(x1))
 
-        Constriant = 0.002
+        Constriant = 0.003
         Lbound = 0
         Rbound = 1
         # 对于每个动作，使用相应的线性层生成参数
@@ -504,34 +587,24 @@ class Actor(nn.Module):
         #param1_0 = self.gluAction0(x5)
         
         # This detach is to remove the gradient calculation of sigmoid and tanh, since this is the physical constraint, we do not want it to influence the gradient calculation, which may lead to the gradient disappear
-        param2_0 = 0.5 + F.softsign(self.layer_param2_0(param1_0)) * 0.45
+        param2_0 = 0.5 + F.softsign(self.layer_param2_0(param1_0.detach())) * 0.45
         
-        
-        
-        
-        param3_0 = Constriant * F.softsign(self.layer_param3_0(param1_0))
-        param4_0 = Constriant * F.softsign(self.layer_param4_0(param1_0))
-
-        #param1_1 = Lbound + torch.sigmoid(F.relu(self.layer_param1_1(h_t))) * (Rbound - Lbound)
-        #param2_1 = Lbound + torch.sigmoid(self.layer_param2_1(param1_1)) * (Rbound -Lbound)
-
-        #param1_2 = Lbound + torch.sigmoid(F.relu(self.layer_param1_2(h_t))) * (Rbound -Lbound)
-        #param2_2 = Lbound + torch.sigmoid(self.layer_param2_2(param1_2)) * (Rbound -Lbound)
+        param3_0 = Constriant * F.softsign(self.layer_param3_0(param1_0.detach()))
+        param4_0 = Constriant * F.softsign(self.layer_param4_0(param1_0.detach()))
 
         param1_1 = F.selu(self.layer_param1_1(x2))
         
-        param2_1 = Constriant * F.softsign(self.layer_param2_1(param1_1))
+        param2_1 = Constriant * F.softsign(self.layer_param2_1(param1_1.detach()))
 
         param1_2 = F.selu(self.layer_param1_2(x2))
-        param2_2 = Constriant * F.softsign(self.layer_param2_2(param1_2))
+        param2_2 = Constriant * F.softsign(self.layer_param2_2(param1_2.detach()))
 
         action_params = [[param2_0, param3_0, param4_0], 
                          [param2_1], 
                          [param2_2]] 
-                         #[param2_3], 
-                         #[param2_4]]
 
-        return action, action_params, saved_recon_state, saved_mu, saved_logvar, x2, param2_0
+
+        return action, action_params, x2, param2_0
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -580,9 +653,9 @@ class AttentionLayer(nn.Module):
             nn.ReLU(),
             nn.Linear(2 * dim, dim)
         )
-        self.linear1 = nn.Linear(243 , 256)
-        self.linear2 = nn.Linear(10, 256)
-        self.linear3 = nn.Linear(4, 256)
+        self.linear1 = nn.Linear(51 , 64)
+        self.linear2 = nn.Linear(10, 64)
+        self.linear3 = nn.Linear(4, 64)
         self.norm1 = nn.LayerNorm(dim)
         self.norm2 = nn.LayerNorm(dim)
         self.norm3 = nn.LayerNorm(dim)
@@ -622,29 +695,31 @@ class AttentionLayer(nn.Module):
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim = 3, action_param_dim = 3):
         super(Critic, self).__init__()
+        
+        self.CriticAttention = ControlPointsAttention(feature_dim=2, attention_dim = 2)
 
-
-        # State processing
-        self.state_fc1 = nn.Linear(66 * 2 * 4 , 1024)
-        # 66 for the upper, 2 for the both side, upper and lower, 2 for the x and y
-        self.state_fc2 = nn.Linear(1024, 243)
+        self.stateTransformer = nn.Linear(15 * 2 * 2, 51)
         
         self.ActionParam_norm = nn.LayerNorm(9)
         
         #self.bn_state = nn.BatchNorm1d(256)
-        self.attention_layer = AttentionLayer(dim = 256, nhead = 8)
+        self.attention_layer = AttentionLayer(dim = 64, nhead = 8)
         
-        #self.res_blockCritic1 = ResidualBlock(45, 128, 45)
-        self.fullyConnect = nn.Linear(256, 32)
+        self.res_blockCritic1 = ResidualBlock(64, 512, 64)
+        self.res_blockCritic2 = ResidualBlock(64, 256, 64)
+        
+        #self.fullyConnect = nn.Linear(64, 16)
         
         # Fusion and Q-value estimation
         
-        self.fusion_fc2 = nn.Linear(32, 8)
+        self.fusion_fc2 = nn.Linear(64, 16)
+        self.fusion_fc3 = nn.Linear(16, 4)
         
-        self.q_value_fc = nn.Linear(8, 1)
+        self.q_value_fc = nn.Linear(4, 1)
 
         # Dropout layer
-        self.dropout = nn.Dropout(p=0.02)
+        self.dropout1 = nn.Dropout(p=0.02)
+        self.dropout2 = nn.Dropout(p=0.02)
 
         # Initialize weights
         self.apply(self._init_weights)
@@ -652,36 +727,17 @@ class Critic(nn.Module):
     def forward(self, state, action, action_params):
         
         batch_size = state.size(0)
+        print("state shape: ", state.shape)
         CriticState = state
-        thickness = torch.zeros(batch_size, 66, 2).to(device)
-        for i in range(66):
-            assert (CriticState[:, i, 0] == CriticState[:, i + 66, 0]).all(), f"Index {i} failed the assertion"
-            thickness[:, i, 0] = CriticState[:, i, 0]
-            thickness[:, i, 1] = abs(CriticState[:, i, 1] - CriticState[:, i + 66, 1])
-        thickness = thickness.view(batch_size, -1)
-        stateVec = CriticState.view(batch_size, -1).to(device) 
-        
-        vectors = CriticState[:, 1:] - CriticState[:, :-1]
-        # 为循环曲线添加最后一个点与第一个点的差值
-        last_vector = CriticState[:, 0] - CriticState[:, -1]
-        vectors = torch.cat((vectors, last_vector.unsqueeze(1)), dim=1)
-        
-        # 计算相邻两个向量的夹角
-        angles = torch.zeros(batch_size, 66 * 2).to(device)
-        for i in range( 66 * 2 ):
-            v1 = vectors[:, i]
-            v2 = vectors[:, (i + 1) % 66 * 2]  # 使用模运算实现循环
-            cos_theta = (v1 * v2).sum(dim=-1) / (torch.norm(v1, dim=-1) * torch.norm(v2, dim=-1))
-            cos_theta = torch.clamp(cos_theta, -1, 1)  # 避免数值误差导致超出[-1, 1]范围
-            angles[:, i] = torch.acos(cos_theta)
-        
-        statefusion = torch.cat((stateVec, thickness, angles), dim=1).to(device) 
         
         
-        statefusion = F.gelu(self.state_fc1(statefusion))
-        statefusion = F.gelu(self.state_fc2(statefusion))
+        #print("actor_state shape: ", ActorState.shape)
+        attention_output, attention_weights = self.CriticAttention(CriticState)                 
+        enhanced_features = CriticState + attention_output
+        flat_features = enhanced_features.view(batch_size, -1)
+        flat_features = self.stateTransformer(flat_features)
         
-        
+
         # 选择概率最大的动作及其对应的参数
         CriticAction = action
         print("CriticAction content: ", CriticAction)
@@ -701,13 +757,17 @@ class Critic(nn.Module):
         print("selected_param content: ", selected_param)
         
         # 融合特征
-        x = self.attention_layer(statefusion, CriticAction, CriticAction_param, max_action)
-        # 243 for state, 3 for action, 9 for selected_param, 1 for max_action
+        x = self.attention_layer(flat_features, CriticAction, CriticAction_param, max_action)
+        #  51 for state, 3 for action, 9 for selected_param, 1 for max_action
+        fusionSAP = torch.cat([flat_features.float(), CriticAction.float(), CriticAction_param.float(), max_action.float()], dim=1)
         
         #x = self.res_blockCritic1(x)
-        x= F.selu(self.fullyConnect(x))
-        x= self.dropout(x)
-        x = F.selu(self.fusion_fc2(x))  
+        x= F.selu(self.res_blockCritic1(x + fusionSAP))
+        x= self.dropout1(x)
+        x= F.selu(self.res_blockCritic2(x))
+        x= self.dropout2(x)
+        x = F.selu(self.fusion_fc2(x)) 
+        x = F.selu(self.fusion_fc3(x)) 
         
         # Estimate the Q-value
         q_value = self.q_value_fc(x)
@@ -734,11 +794,34 @@ class ReplayBuffer:
         else:
             self.storage.append(transition)
             print("Added to buffer. Current size:", len(self.storage))
+            
+    def sample(self, batch_size, use_weighted_sampling= True):
+        # 确保 batch_size 可以被 2 整除
+        assert batch_size % 2 == 0, "batch_size 需要是偶数"
 
-    def sample(self, batch_size):
-        ind = np.random.randint(0, len(self.storage), size=batch_size)
+        half_batch = batch_size // 2
+
+        if use_weighted_sampling:
+            # 提取所有奖励
+            rewards = np.array([transition[4] for transition in self.storage])
+
+            # 计算权重（这里以指数函数为例，你可以根据需要调整）
+            weights = np.exp(rewards - np.max(rewards))  # 减去最大值以避免数值问题
+            weights /= np.sum(weights)  # 归一化权重
+
+            # 根据权重进行随机采样半批次
+            ind_weighted = np.random.choice(len(self.storage), size=half_batch, p=weights)
+        else:
+            ind = np.random.randint(0, len(self.storage), size=half_batch)
+
+        # 进行常规随机采样另一半批次
+        ind_random = np.random.randint(0, len(self.storage), size=half_batch)
+
+        # 合并两种采样索引
+        ind = np.concatenate([ind_weighted, ind_random])
+
+        # 以下为采样逻辑，与原始代码相同
         batch_states, batch_actions, batch_action_params, batch_next_states, batch_rewards = [], [], [], [], []
-
         for i in ind:
             state, action, action_params, next_state, reward = self.storage[i]
             batch_states.append(state)
@@ -781,29 +864,29 @@ class DDPGAgent:
         "../data/multipleAgent/agent2/naca0012Revised.dat",
         "../data/multipleAgent/agent3/naca0012Revised.dat",
         ]
+        self.baselinepath = "../data/multipleAgent/agent0/baseline.dat"
         self.max_action = max_action
         self.previous_drag = None
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=4e-4)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=8e-3)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=2e-4)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=6e-3)
         #Here we use the Twin from the Twin delayed DDPG algorithm
-        self.criticTwin_optimizer = optim.Adam(self.criticTwin.parameters(), lr=4e-3)
-        self.vae_optimizer = optim.Adam(self.actor.vae.parameters(), lr=4e-3)
-        self.noiseAction = OUNoise(action_dim=3, sigma= 0.001) # for action
-        self.noise_0 = OUNoise(action_dim=3) # for param2_0, param3_0
-        self.noise_3 = OUNoise(action_dim=1) # for param2_3
-        self.noise_4 = OUNoise(action_dim=1) # for param2_4
+        self.criticTwin_optimizer = optim.Adam(self.criticTwin.parameters(), lr=3e-3)
+        self.noiseAction = OUNoise(sigma= [0.001, 0.001, 0.001]) # for action
+        self.noise_0 = OUNoise(sigma = [0.015, 0.000005, 0.000005]) # for param2_0, param3_0
+        self.noise_3 = OUNoise(sigma = 0.000005) # for param2_3
+        self.noise_4 = OUNoise(sigma = 0.000005) # for param2_4
         self.epsilon = 1.0  # initial exploration rate
         self.epsilon_min = 0.1  # minimum exploration rate
-        self.epsilon_decay = 0.999
-        self.bias_for_action_0 = 0.9 #give a bias(more) for action 0
+        self.epsilon_decay = 0.98
+        self.bias_for_action_0 = 0.5 #give a bias(more) for action 0
 
         #self.noise_scale = 0.005
         #self.noise_reduction_factor = 0.85
-        self.actor_scheduler = lr_scheduler.StepLR(self.actor_optimizer, step_size=20, gamma=0.9)
-        self.critic_scheduler = lr_scheduler.StepLR(self.critic_optimizer, step_size=10, gamma=0.95)
-        self.criticTwin_scheduler = lr_scheduler.StepLR(self.criticTwin_optimizer, step_size=10, gamma=0.95)
-        self.vae_scheduler = lr_scheduler.StepLR(self.vae_optimizer, step_size=20, gamma=0.9)
-        self.updateActor_frequency = 2
+        self.actor_scheduler = lr_scheduler.StepLR(self.actor_optimizer, step_size=2, gamma=0.98)
+        self.critic_scheduler = lr_scheduler.StepLR(self.critic_optimizer, step_size=1, gamma=0.95)
+        self.criticTwin_scheduler = lr_scheduler.StepLR(self.criticTwin_optimizer, step_size=1, gamma=0.95)
+        #self.vae_scheduler = lr_scheduler.StepLR(self.vae_optimizer, step_size=1, gamma=0.95)
+        self.updateActor_frequency = 3
         self.update_frequency = 5
         self.update_counter = 0
         self.best_reward_so_far = [0.1, 0.1, 0.1, 0.1]
@@ -811,8 +894,8 @@ class DDPGAgent:
         self.actor_target = copy.deepcopy(actor).to(device)
         self.critic_target = copy.deepcopy(critic).to(device)
         self.criticTwin_target = copy.deepcopy(critic).to(device)
-        self.tauTrain = 0.01
-        self.update_frequencyTrain = 2
+        self.tauTrain = 0.005
+        self.update_frequencyTrain = 3
         self.accumlateReward = [0, 0, 0, 0]
         
     def update_epsilon(self):
@@ -820,11 +903,16 @@ class DDPGAgent:
         self.bias_for_action_0 = max(self.bias_for_action_0 * self.epsilon_decay, 0.05)
 
     def select_action(self, state):
-        state = state.to(device)
+        
+        control_states = fit_bezier_curves(state.cpu())
+        #print("control_states shape: ", control_states.shape)
+        #print("control_states content: ", control_states)
+        state = control_states.to(device)
+        
         
         # Decide whether to explore or exploit
         explore = np.random.rand() < self.epsilon
-        guide = np.random.rand() < self.epsilon * 0.5
+        guide = np.random.rand() < self.epsilon 
         
         with torch.no_grad():
             # 如果state不是批次输入（即它只有两个维度），我们添加一个批次维度
@@ -833,12 +921,12 @@ class DDPGAgent:
                 state = state.unsqueeze(0)
 
             #state = torch.FloatTensor(state)
-            action_probs, action_params, recon_state, mu, logvar, layerNODETACH, param2_0 = self.actor(state)
+            action_probs, action_params, layerNODETACH, param2_0 = self.actor(state)
             action_noise = torch.tensor(self.noiseAction.sample()).to(device)
             print("Action probabilities before noise:", action_probs)
             if explore:
                 action_probs = action_probs + action_noise * 100
-                print("noise :", action_noise)  
+                print("noise :", action_noise * 100)  
                  # 给动作0增加一个偏置
                 action_probs[0][0] += self.bias_for_action_0
                 print("Action probabilities after bias:", action_probs)
@@ -846,7 +934,7 @@ class DDPGAgent:
                 # 确保概率和为1
                 action_probs = action_probs / action_probs.sum()
             else:
-                action_probs = action_probs + action_noise * 10
+                action_probs = action_probs + action_noise * 5
                 action_probs = action_probs / action_probs.sum()   
                 epsilon = 5.0e-2  # 小的正值，用来防止 log(0)
                 action_probs = torch.clamp(action_probs, min=epsilon, max=1-epsilon)  # 裁剪概率值  
@@ -878,16 +966,30 @@ class DDPGAgent:
                         for i, param_idx in enumerate(noise_indices[action4execute]):
                             if explore:
                                 if i == 0:
-                                    action_params4execute[i] += noise[i] * 120
-                                    action_params[0][0] += noise[i] * 120
+                                    if action_params4execute[i] < 0.3 :
+                                        action_params4execute[i] += abs(noise[i] * 15)
+                                        action_params[0][0] += abs(noise[i] * 15)
+                                    elif action_params4execute[i] > 0.7:
+                                        action_params4execute[i] -= abs(noise[i] * 15)
+                                        action_params[0][0] -= abs(noise[i] * 15)
+                                    else:
+                                        action_params4execute[i] += noise[i] * 10
+                                        action_params[0][0] += noise[i] * 10
                                 else:
-                                    action_params4execute[i] += noise[i] * 2
-                                    action_params[0][i] += noise[i] * 2
+                                    action_params4execute[i] += noise[i] 
+                                    action_params[0][i] += noise[i] 
+                                    
                                     if guide:
-                                        action_params4execute[1] = -abs(action_params4execute[1])
-                                        action_params4execute[2] = abs(action_params4execute[2])
-                                        action_params[0][1] = action_params4execute[1]
-                                        action_params[0][2] = action_params4execute[2]
+                                        if action_params4execute[1] > 0:
+                                            action_params4execute[2] = -abs(action_params4execute[2])
+                                            action_params[0][2] = action_params4execute[2]
+                                            
+                                        else:
+                                            action_params4execute[2] = abs(action_params4execute[2])
+                                            action_params[0][2] = action_params4execute[2]
+                                            
+                                            
+                                    
                             else:
                                 action_params4execute[param_idx] += noise[i]
                                 action_params[0][param_idx] += noise[i]
@@ -925,7 +1027,7 @@ class DDPGAgent:
             # And more generally, we consider the positve and negative separately
             # For point near to the end point, we multiplicate abs(1 - action_params4execute[0]) * abs(action_params4execute[0]) to avoid parameters out of range
             param_limits = {
-                0: [(0.02, 0.99), (-0.005, 0.005), (-0.005, 0.005)],
+                0: [(0.05, 0.95), (-0.005, 0.005), (-0.005, 0.005)],
                 1: [(-0.002, 0.002)],
                 2: [(-0.002, 0.002)]
             }
@@ -963,7 +1065,7 @@ class DDPGAgent:
         total_distance = calculate_total_distance(total_points_list)
     
         # 如果 total_distance 超出范围，返回一个惩罚值
-        if not (1.9 <= total_distance <= 3.6):
+        if not (2.0 <= total_distance <= 3.2):
             print(f"total_distance = {total_distance}")
             return -6.0
 
@@ -971,7 +1073,12 @@ class DDPGAgent:
         if self.previous_drag is None:
             reward = 0.0
         else:
-            reward = 100* (self.previous_drag - current_drag)
+            reward = 100 * (self.previous_drag - current_drag)
+            if reward > 0:
+                reward += ( 0.046 - current_drag) * 20
+            elif 0.046 - current_drag < 0:
+                reward += ( 0.046 - current_drag) * 20
+            
         self.previous_drag = current_drag
         
         return reward
@@ -1030,7 +1137,7 @@ class DDPGAgent:
             entropy = calculate_entropy(action)
             
             # Apply the action and get the new state
-            success, _, warning_occurred = perform_action(self.filepaths[agentIndex], action4execute, action_params4execute)
+            success, _, warning_occurred = perform_action(self.filepaths[agentIndex], action4execute, action_params4execute, self.baselinepath)
             next_state = load_and_process_data(self.filepaths[agentIndex]).to(device)
 
             # Get the reward     
@@ -1039,7 +1146,7 @@ class DDPGAgent:
             
             
             if warning_occurred:
-                reward -= 2
+                reward -= 0.5
             elif reward > 0:
                 if action4execute == 0:
                     reward *= 1.3
@@ -1049,22 +1156,32 @@ class DDPGAgent:
             if action4execute == 0 and reward < 0:
                 print(f"[OPPSITE] Now we try the opposite direction")
                 save_opposite_state(mesh_filepath=f"./agent{agentIndex}/body.mesh", airfoil_data_filepath=f"../data/multipleAgent/agent{agentIndex}/naca0012Revised.dat",  mapping_filepath=f"./agent{agentIndex}/CurrentPoint.dat", agentIndex=agentIndex,)
+                action_paramsSaved = action_params
                 
                 action_params4execute[1] = - 2 * action_params4execute[1]
                 action_params4execute[2] = - 2 * action_params4execute[2]
                 action_params[0][1] = action_params4execute[1]
                 action_params[0][2] = action_params4execute[2]     
-                success, _, warning_occurred = perform_action(self.filepaths[agentIndex], action4execute, action_params4execute)  
+                success, _, warning_occurred = perform_action(self.filepaths[agentIndex], action4execute, action_params4execute, self.baselinepath)  
                 opposite_state = load_and_process_data(self.filepaths[agentIndex])
                 opposite_reward = self.get_reward(agentIndex) + reward
                 print("[OPPOSITE] Parameters in the opposite:", action_params4execute)
                 if opposite_reward > reward:
+                    ###################################################################################
+                    # The oppsite state is continue to be used, now we add the origin to replay buffer
+                    # The next state has not been changed, this is the origin next state
+                    self.replay_buffer.add((state, action, action_paramsSaved, next_state, reward))
+                    ###################################################################################
                     next_state = opposite_state
                     reward = opposite_reward
                     if reward > 0:
                         reward *= 1.3
                     print(f"[OPPOSITE] Oppsite direction is better, reward = {reward}")
                 else:
+                    ###################################################################################
+                    # The original state is continue to be used, now we add the opposite to replay buffer
+                    self.replay_buffer.add((state, action, action_params, opposite_state, opposite_reward))
+                    ###################################################################################
                     action_params4execute[1] = - 0.5 * action_params4execute[1]
                     action_params4execute[2] = - 0.5 * action_params4execute[2]
                     action_params[0][1] = action_params4execute[1]
@@ -1102,13 +1219,26 @@ class DDPGAgent:
                 batch_action_params_padded = torch.tensor(batch_action_params_padded, dtype=torch.float32).to(device)
                 #print("batch_action_params_padded shape after stacking: ", batch_action_params_padded.shape)
                 #print("batch_action_params_padded content after stacking: ", batch_action_params_padded)
+                
+                control_states = fit_bezier_curves(batch_states.cpu())
+                control_states = control_states.to(device)
+                #print("control_states shape: ", control_states.shape)
+                #print("control_states content: ", control_states)
+                
+                
+                
                 # Get current Q estimate
-                current_Q = self.critic(batch_states, batch_actions, batch_action_params_padded)
-                print("current_Q shape : ", current_Q.shape)
-                print("current_Q content : ", current_Q)
+                current_Q1= self.critic(control_states, batch_actions, batch_action_params_padded)
+                print("current_Q1 shape : ", current_Q1.shape)
+                print("current_Q1 content : ", current_Q1)
+                current_Q2= self.criticTwin(control_states, batch_actions, batch_action_params_padded)
+                print("current_Q2 shape : ", current_Q2.shape)
+                print("current_Q2 content : ", current_Q2)
+                current_Q = custom_min(current_Q1, current_Q2)
+                
                 # Compute the target Q value
                 #print("batch_next_states content: ", batch_next_states)
-                next_actions, next_action_params, recon_state, mu, logvar, BATCHlayerNODETACH, BATCHparam2_0 = self.actor_target(batch_next_states) 
+                next_actions, next_action_params, BATCHlayerNODETACH, BATCHparam2_0 = self.actor_target(control_states) 
                 
                 
                 #print("next_actions shape: ", next_actions.shape)
@@ -1148,34 +1278,46 @@ class DDPGAgent:
                 #print("next_action_params_padded shape: ", next_action_params_padded.shape)
                 #print("next_action_params_padded content: ", next_action_params_padded)
                 # Handle action parameters for next_action_params
-                target_Q1 = self.critic_target(batch_next_states, next_actions, next_action_params_padded)
-                target_Q2 = self.criticTwin_target(batch_next_states, next_actions, next_action_params_padded)
+                
+                next_control_states = fit_bezier_curves(batch_next_states.cpu())
+                next_control_states = next_control_states.to(device)
+                
+                target_Q1 = self.critic_target(next_control_states, next_actions, next_action_params_padded)
+                target_Q2 = self.criticTwin_target(next_control_states, next_actions, next_action_params_padded)
                 target_Q = custom_min(target_Q1, target_Q2)
                 batch_rewards = batch_rewards.unsqueeze(1).to(device)
                 print("batch_rewards content : ", batch_rewards)
-                target_Q = batch_rewards + (discount * target_Q).detach()
+                target_Q= batch_rewards + (discount * target_Q).detach()
                 #print("target_Q shape : ", target_Q.shape)
                 print("target_Q1 content : ", target_Q1)
                 print("target_Q2 content : ", target_Q2)
                 print("target_Q content : ", target_Q)
                 # Compute critic loss
-                critic_loss = F.mse_loss(current_Q, target_Q)
+                critic_loss = F.smooth_l1_loss(current_Q, target_Q, beta=0.5) 
 
                 # Optimize the critic
                 self.critic_optimizer.zero_grad()
                 self.criticTwin_optimizer.zero_grad()
                 critic_loss.backward()
-                clip_grad_norm_(self.actor.parameters(), max_norm=5.0)
+                clip_grad_norm_(self.actor.parameters(), max_norm=2.0)
                 self.critic_optimizer.step()
                 self.criticTwin_optimizer.step()
                 
+                # update the critic target network, every time the critic is updated, the critic target network is updated as well
+                for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+                    target_param.data.copy_(self.tauTrain * param.data + (1 - self.tauTrain) * target_param.data)
 
-                if it % self.updateActor_frequency == 0:
-                    new_actions, new_action_params, batch_recon_state, batch_mu, batch_logvar, layerNODETACH, param2_0 = self.actor(batch_states)
-                    batch_states4loss = batch_states.view(batch_size, -1)
-                    vae_loss = loss_function(batch_recon_state, batch_states, batch_mu, batch_logvar)
+                for param, target_param in zip(self.criticTwin.parameters(), self.criticTwin_target.parameters()):
+                    target_param.data.copy_(self.tauTrain * param.data + (1 - self.tauTrain) * target_param.data)
+                
+
+                if (it + 1) % self.updateActor_frequency == 0 or warning_occurred:
+                    new_actions, new_action_params, layerNODETACH, param2_0 = self.actor(control_states)
+                    #batch_states4loss = batch_states.view(batch_size, -1)
+                    #vae_loss = loss_function(batch_recon_state, batch_states, batch_mu, batch_logvar)
+                    #InitialVAE = vae_loss
                     new_action_params_padded = self.pad_actor_action_params(batch_size4actor, new_action_params)
-                    print( "vae_loss: ", vae_loss)
+                    #print( "vae_loss: ", vae_loss)
                     
                     regularization = torch.norm(layerNODETACH, p=2)
                     print("regularization: ", regularization)
@@ -1190,35 +1332,59 @@ class DDPGAgent:
                     print("penalty_loss: ", penalty_loss)
                     
                         
-                    actor_loss = -self.critic(batch_states, new_actions, new_action_params_padded).mean() - 2.0 * entropy + 0.0003 * regularization + penalty_loss
+                    #actor_loss = -self.critic(batch_states, new_actions, new_action_params_padded).mean() - 2.0 * entropy + 0.0003 * regularization + penalty_loss
+                    mean_value= self.critic(control_states, new_actions, new_action_params_padded)
+                    print("mean_value: ", mean_value) 
+                    #actor_loss = - mean_value.mean() - 2.0 * entropy + 0.0003 * regularization
+                    actor_loss = - mean_value.mean()+ 0.0003 * regularization - 2.0 * entropy
+                     
+                    # Optimize the VAE
+                    '''
+                    for vae_turn in range(100):
+                        VAE_actions, VAE_action_params, VAE_recon_state, VAE_mu, VAE_logvar, _, _= self.actor(batch_states)
+                        vae_loss = loss_function(VAE_recon_state, batch_states, VAE_mu, VAE_logvar)
+                        #print("VAE turn: ", vae_turn, "VAE loss: ", vae_loss)
+                        if vae_loss <max( 0.01 * InitialVAE, 0.1 * abs(actor_loss)) or vae_turn == 99:
+                            self.vae_optimizer.zero_grad()
+                            vae_loss.backward(retain_graph = True)
+                            break
+                        self.vae_optimizer.zero_grad()
+                        vae_loss.backward()
+                        clip_grad_norm_(self.actor.vae.parameters(), max_norm=5.0)
+                        self.vae_optimizer.step()
+                        '''
+                        
+                        
+                        
+                    torch.autograd.set_detect_anomaly(True)     
                     
                     # Optimize the actor
                     self.actor_optimizer.zero_grad()
+                    #self.vae_optimizer.zero_grad()   
+                    #actor_loss.backward()
+                    torch.autograd.set_detect_anomaly(True)      
                     actor_loss.backward()
                     clip_grad_norm_(self.actor.parameters(), max_norm=5.0)
                     self.actor_optimizer.step()
+                    #self.vae_optimizer.step()
 
-                    # Optimize the VAE
-                    self.vae_optimizer.zero_grad()
-                    vae_loss.backward()
-                    clip_grad_norm_(self.actor.vae.parameters(), max_norm=5.0)
-                    self.vae_optimizer.step()
+        
 
                     
                 
                 # Update the target networks
                 # The target networks update with formular tau * theta + (1 - tau) * theta_target
-                if it % self.update_frequencyTrain == 0:
-                    for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-                        target_param.data.copy_(self.tauTrain * param.data + (1 - self.tauTrain) * target_param.data)
-
+                if (it + 1) % self.update_frequencyTrain == 0:
                     for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
                         target_param.data.copy_(self.tauTrain * param.data + (1 - self.tauTrain) * target_param.data)
-                    for param, target_param in zip(self.criticTwin.parameters(), self.criticTwin_target.parameters()):
-                        target_param.data.copy_(self.tauTrain * param.data + (1 - self.tauTrain) * target_param.data)
+
                 self.noise_0.reset()
                 self.noise_3.reset()
                 self.noise_4.reset()
-        return actor_loss.item(), critic_loss.item(), vae_loss.item()
+                
+            if warning_occurred:
+                break
+                
+        return actor_loss.item(), critic_loss.item()
 
 
